@@ -217,8 +217,11 @@ export class Traffic {
           if (tc >= row.length) tc = row.length - 1;
           const g = row[tc];
           if (g === ' ') continue;
-          screen.set(x, y, g,
-            a.kind === 'car' ? (g === 'o' ? lampCol : bodyCol) : pedCol);
+          // setDepth, not set: labels are drawn after sprites and depth-test
+          // against the buffer, so a car in front of a street name has to
+          // record that it is there.
+          screen.setDepth(x, y, g,
+            a.kind === 'car' ? (g === 'o' ? lampCol : bodyCol) : pedCol, dp);
         }
       }
     }

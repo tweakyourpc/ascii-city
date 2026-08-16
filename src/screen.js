@@ -60,11 +60,13 @@ export class Screen {
     this.colour = new Array(n);
     this.depth = new Float32Array(n);
     this.skyEnd = new Int32Array(this.cols);
+    this.scrims = [];
   }
 
   clear() {
     this.glyph.fill(undefined);
     this.depth.fill(1e9);
+    this.scrims.length = 0;
   }
 
   set(x, y, ch, colour) {
@@ -93,10 +95,60 @@ export class Screen {
     }
   }
 
+  /**
+   * Left-aligned text, clipped to the grid. Spaces are left transparent so a
+   * label does not punch a hole in whatever it sits on.
+   * @returns {number} glyphs actually written
+   */
+  text(x, y, str, colour) {
+    if (y < 0 || y >= this.rows) return 0;
+    const base = y * this.cols;
+    let n = 0;
+    for (let i = 0; i < str.length; i++) {
+      const cx = x + i;
+      if (cx < 0) continue;
+      if (cx >= this.cols) break;
+      if (str[i] === ' ') continue;
+      this.glyph[base + cx] = str[i];
+      this.colour[base + cx] = colour;
+      n++;
+    }
+    return n;
+  }
+
+  /**
+   * As text(), but writes only the cells the caller's depth `d` is in front of,
+   * so world-anchored labels are occluded by geometry.
+   */
+  textDepth(x, y, str, colour, d) {
+    if (y < 0 || y >= this.rows) return 0;
+    const base = y * this.cols;
+    let n = 0;
+    for (let i = 0; i < str.length; i++) {
+      const cx = x + i;
+      if (cx < 0) continue;
+      if (cx >= this.cols) break;
+      if (str[i] === ' ') continue;
+      if (d > this.depth[base + cx]) continue;
+      this.glyph[base + cx] = str[i];
+      this.colour[base + cx] = colour;
+      n++;
+    }
+    return n;
+  }
+
   /** Centre a line of text on a given row. Used for load and error states. */
   centreText(y, text, colour) {
-    const x0 = Math.floor((this.cols - text.length) / 2);
-    for (let i = 0; i < text.length; i++) this.set(x0 + i, y, text[i], colour);
+    return this.text(Math.floor((this.cols - text.length) / 2), y, text, colour);
+  }
+
+  /**
+   * Queue a translucent rectangle, in cell coordinates, painted at the start of
+   * the next blit. The glyph grid has no per-cell background, and the sky is
+   * painted straight to the canvas, so a panel backdrop has to go here.
+   */
+  scrim(x, y, w, h, style) {
+    this.scrims.push([x, y, w, h, style]);
   }
 
   /**
@@ -106,6 +158,15 @@ export class Screen {
    */
   blit() {
     const { ctx, cols, rows, cw, ch, glyph, colour } = this;
+
+    // Backdrops first, under the glyphs.
+    for (let i = 0; i < this.scrims.length; i++) {
+      const [sx, sy, sw, sh, style] = this.scrims[i];
+      ctx.fillStyle = style;
+      ctx.fillRect(sx * cw, sy * ch, sw * cw, sh * ch);
+    }
+    this.scrims.length = 0;
+
     ctx.font = `${FONT_PX}px ${FONT_STACK}`;
 
     for (let y = 0; y < rows; y++) {

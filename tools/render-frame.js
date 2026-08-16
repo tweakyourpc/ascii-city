@@ -21,6 +21,7 @@ import { ProceduralWorld } from '../src/world/procedural.js';
 import { OsmWorld } from '../src/world/osm.js';
 import { Lighting } from '../src/render/materials.js';
 import { renderScene } from '../src/render/raycaster.js';
+import { Labels } from '../src/render/labels.js';
 import { julianDay, sunPos, altAz } from '../src/astro.js';
 import { FONT_PX, LINE_RATIO, FOV, HORIZON_FRAC, DEFAULT_LAT, DEFAULT_LON } from '../src/config.js';
 
@@ -150,6 +151,9 @@ screen.depth.fill(1e9);
 
 const t0 = process.hrtime.bigint();
 renderScene(screen, cam, world, light, when.getTime() / 1000);
+const labels = new Labels();
+if (args.has('nolabels')) labels.mode = 0;
+labels.draw(screen, cam, world, light);
 const ms = Number(process.hrtime.bigint() - t0) / 1e6;
 
 /* -------------------------------- output -------------------------------- */
@@ -190,7 +194,8 @@ console.error(
   `\ncamZ ${CAM_Z}  pitch ${PITCH}  hz ${cam.hz.toFixed(1)}  hour ${HOUR}` +
   `  sunAlt ${sp.alt.toFixed(1)}\n` +
   `${COLS}x${ROWS}  filled ${(drawn / (COLS * ROWS) * 100).toFixed(1)}%` +
-  `  skyEnd ${skyMin}..${skyMax}  NaN depths ${nan}  render ${ms.toFixed(1)}ms`);
+  `  skyEnd ${skyMin}..${skyMax}  NaN depths ${nan}  render ${ms.toFixed(1)}ms` +
+  `  labels ${labels.lastCounts.streets}+${labels.lastCounts.landmarks}`);
 
 if (nan > 0) {
   console.error('FAIL: NaN in the depth buffer');

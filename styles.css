@@ -66,6 +66,12 @@ html, body {
 #hud button:hover { background: rgba(0, 44, 58, .9); }
 #hud button:disabled { opacity: .45; cursor: default; }
 
+#hud .where {
+  color: #ffd479;
+  letter-spacing: .06em;
+  min-height: 1.8em;
+}
+
 #hud .err { color: #ff9b7a; }
 #hud a { color: #3d8fa3; }
 

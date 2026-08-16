@@ -92,6 +92,18 @@ const WATERWAY_W = { river: 26, canal: 14, stream: 5 };
 /** Roughly 60 m: the height above which buildings carry warning lights. */
 const BEACON_MIN_H = 25;
 
+/**
+ * How much a road class deserves a label. Arterials win ties, because on a
+ * screen with room for eight names you want the ones people navigate by.
+ */
+const NAMED_RANK = {
+  motorway: 4, trunk: 4, primary: 3, secondary: 3, tertiary: 2,
+  residential: 1, unclassified: 1, living_street: 1, pedestrian: 1,
+};
+
+/** A building is a landmark if it is named AND (tall OR has a Wikipedia link). */
+const LANDMARK_H = 25;
+
 /* ------------------------------ the world ------------------------------- */
 
 export class OsmWorld {
@@ -123,9 +135,26 @@ export class OsmWorld {
     this.lamp = new Float32Array(n + 1);
     this.pal = new Uint8Array(n + 1);
     this.flags = new Uint8Array(n + 1);
+    // Seventh per-cell array: which building owns this cell, 0 for none.
+    // Uint16 caps at 65534 buildings; the bbox limit allows about 5300 at
+    // Manhattan density, so this is a 12x margin.
+    this.bid = new Uint16Array(n + 1);
 
     this.roadCells = [];
     this.stats = { buildings: 0, roads: 0, water: 0, green: 0, skipped: 0 };
+
+    /* --- identification tables, all populated during rasterization --- */
+    this.buildings = [null];        // index 0 is the "no building" sentinel
+    this.landmarks = [];            // indices into buildings, tallest first
+    this.streetNames = [];
+    this.streetTags = [];
+    this.streetRank = [];           // highest road class seen for each name
+    this.segs = null;               // named-road segments, for nearestStreet
+    this.anchor = null;             // typed arrays, built at the end
+    this._nameIds = new Map();
+    this._anchors = [];             // temporary, discarded after packing
+    this._segs = [];                // temporary, packed into this.segs
+    this._vertexNames = new Map();  // rounded vertex -> Set of name ids
 
     this._rasterize(elements);
   }
@@ -231,6 +260,9 @@ export class OsmWorld {
         this.roadCells.push(s);
       }
     }
+
+    this._finishAnchors();
+    this._findLandmarks();
   }
 
   /** All closed rings of an element, projected to cell coordinates. */
@@ -269,18 +301,240 @@ export class OsmWorld {
     cy /= n || 1;
     let beaconAt = null;
     let beaconD = Infinity;
+    let r2max = 0;
+
+    const id = this.buildings.length <= 65534 ? this.buildings.length : 0;
 
     scanFill(rings, this.width, this.height, (x, y) => {
       this._set(x, y, type, h, pal);
+      if (id) this.bid[y * this.width + x] = id;
       touched++;
       const d = (x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2;
+      if (d > r2max) r2max = d;
       if (d < beaconD) { beaconD = d; beaconAt = y * this.width + x; }
     });
 
     if (touched) {
       this.stats.buildings++;
       if (h > BEACON_MIN_H && beaconAt !== null) this.flags[beaconAt] |= F.BEACON;
+      if (id) {
+        // `tags` is retained by reference on purpose. The element objects are
+        // otherwise garbage, and holding the tags while releasing `geometry`
+        // (an order of magnitude larger) is a net saving. It also means the
+        // info panel can show any tag without us guessing at load time.
+        this.buildings.push({
+          osm: `${el.type}/${el.id}`,
+          tags: el.tags || {},
+          name: el.tags?.name ?? null,
+          cx, cy, h,
+          r: Math.sqrt(r2max),
+          cells: touched,
+          notable: 0,
+        });
+      }
     }
+  }
+
+  /**
+   * Emit label anchors along a named way, at a spacing set by its class, and
+   * record its vertices so intersections can be found afterwards.
+   */
+  _roadAnchors(pts, name, rank, tags) {
+    let nameId = this._nameIds.get(name);
+    if (nameId === undefined) {
+      nameId = this.streetNames.length;
+      this.streetNames.push(name);
+      this.streetTags.push(tags || {});
+      this.streetRank.push(rank);
+      this._nameIds.set(name, nameId);
+    } else if (rank > this.streetRank[nameId]) {
+      this.streetRank[nameId] = rank;
+    }
+
+    // Bucket vertices at half-cell resolution. Two different names sharing a
+    // bucket is a junction, which is where a street sign would actually be.
+    for (const [x, y] of pts) {
+      const k = ((x * 2) | 0) * 65536 + ((y * 2) | 0);
+      let set = this._vertexNames.get(k);
+      if (!set) this._vertexNames.set(k, (set = new Set()));
+      set.add(nameId);
+    }
+
+    // Keep the segments themselves. Anchors are spaced tens of cells apart, so
+    // "which street am I on" answered from the nearest anchor can name a
+    // parallel street; answered from the centreline it cannot.
+    for (let i = 1; i < pts.length; i++) {
+      this._segs.push({
+        x1: pts[i - 1][0], y1: pts[i - 1][1],
+        x2: pts[i][0], y2: pts[i][1], name: nameId,
+      });
+    }
+
+    const seg = [];
+    let total = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const len = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+      seg.push(len);
+      total += len;
+    }
+    if (total < 4) return;     // stubs and clipped fragments get nothing
+
+    const spacing = rank >= 3 ? 34 : rank === 2 ? 26 : 20;
+    const n = Math.max(1, Math.round(total / spacing));
+
+    for (let k = 0; k < n; k++) {
+      const want = (k + 0.5) / n * total;
+      let acc = 0;
+      for (let i = 0; i < seg.length; i++) {
+        if (acc + seg[i] >= want) {
+          const t = seg[i] > 1e-9 ? (want - acc) / seg[i] : 0;
+          const ax = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t;
+          const ay = pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t;
+          this._anchors.push({ x: ax, y: ay, name: nameId, rank, junction: 0 });
+          break;
+        }
+        acc += seg[i];
+      }
+    }
+  }
+
+  /**
+   * Flag anchors near a junction, then pack everything into typed arrays.
+   * Runs once at load; the per-frame pass only reads the packed form.
+   */
+  _finishAnchors() {
+    const junctions = [];
+    for (const [k, set] of this._vertexNames) {
+      if (set.size < 2) continue;
+      const jx = Math.floor(k / 65536) / 2;
+      const jy = (k % 65536) / 2;
+      junctions.push([jx, jy]);
+
+      // Emit an anchor at the crossing itself, for every street meeting here.
+      // Mid-block anchors alone almost never land near a junction (measured at
+      // 3%), and "42nd and 5th" is the answer a person actually wants.
+      for (const nameId of set) {
+        this._anchors.push({
+          x: jx, y: jy, name: nameId,
+          rank: this.streetRank[nameId] ?? 0, junction: 1,
+        });
+      }
+    }
+
+    const R2 = 9;   // within 3 cells
+    for (const a of this._anchors) {
+      if (a.junction) continue;
+      for (let j = 0; j < junctions.length; j++) {
+        const dx = a.x - junctions[j][0];
+        const dy = a.y - junctions[j][1];
+        if (dx * dx + dy * dy <= R2) { a.junction = 1; break; }
+      }
+    }
+
+    const n = this._anchors.length;
+    const A = {
+      n,
+      x: new Float32Array(n),
+      y: new Float32Array(n),
+      name: new Uint16Array(n),
+      rank: new Uint8Array(n),
+      junction: new Uint8Array(n),
+    };
+    for (let i = 0; i < n; i++) {
+      const a = this._anchors[i];
+      A.x[i] = a.x; A.y[i] = a.y;
+      A.name[i] = a.name; A.rank[i] = a.rank; A.junction[i] = a.junction;
+    }
+    this.anchor = A;
+    this.stats.anchors = n;
+    this.stats.junctions = junctions.length;
+
+    const m = this._segs.length;
+    this.segs = {
+      n: m,
+      x1: new Float32Array(m), y1: new Float32Array(m),
+      x2: new Float32Array(m), y2: new Float32Array(m),
+      name: new Uint16Array(m),
+    };
+    for (let i = 0; i < m; i++) {
+      const g = this._segs[i];
+      this.segs.x1[i] = g.x1; this.segs.y1[i] = g.y1;
+      this.segs.x2[i] = g.x2; this.segs.y2[i] = g.y2;
+      this.segs.name[i] = g.name;
+    }
+    this.stats.segments = m;
+    this._segs = null;
+
+    this._anchors = null;
+    this._vertexNames = null;
+    this._nameIds = null;
+  }
+
+  /**
+   * Which buildings are worth naming unprompted. Named and either tall or
+   * carrying a Wikipedia link, sorted tallest first so the per-frame cap can
+   * stop early.
+   */
+  _findLandmarks() {
+    for (let i = 1; i < this.buildings.length; i++) {
+      const b = this.buildings[i];
+      if (!b.name) continue;
+      const wiki = !!(b.tags.wikidata || b.tags.wikipedia);
+      const tall = b.h >= LANDMARK_H;
+      if (!wiki && !tall) continue;
+      b.notable = (wiki ? 2 : 0) + (tall ? 1 : 0);
+      this.landmarks.push(i);
+    }
+    this.landmarks.sort((a, z) => this.buildings[z].h - this.buildings[a].h);
+    this.stats.landmarks = this.landmarks.length;
+    this.stats.named = this.buildings.filter((b) => b && b.name).length;
+  }
+
+  /** Squared distance from a point to segment i of the named-road set. */
+  _segDist2(i, x, y) {
+    const S = this.segs;
+    const vx = S.x2[i] - S.x1[i];
+    const vy = S.y2[i] - S.y1[i];
+    const px = x - S.x1[i];
+    const py = y - S.y1[i];
+    const len2 = vx * vx + vy * vy;
+    let t = len2 > 1e-12 ? (px * vx + py * vy) / len2 : 0;
+    if (t < 0) t = 0; else if (t > 1) t = 1;
+    const dx = px - vx * t;
+    const dy = py - vy * t;
+    return dx * dx + dy * dy;
+  }
+
+  /**
+   * Which named street a point is on, and the nearest different one.
+   * Measured against road centrelines, so it is correct even standing between
+   * two anchors.
+   */
+  nearestStreet(x, y) {
+    const S = this.segs;
+    if (!S || S.n === 0) return null;
+
+    let on = -1;
+    let bd = Infinity;
+    for (let i = 0; i < S.n; i++) {
+      const d = this._segDist2(i, x, y);
+      if (d < bd) { bd = d; on = S.name[i]; }
+    }
+    if (on < 0) return null;
+
+    let cross = -1;
+    let cd = Infinity;
+    for (let i = 0; i < S.n; i++) {
+      if (S.name[i] === on) continue;
+      const d = this._segDist2(i, x, y);
+      if (d < cd) { cd = d; cross = S.name[i]; }
+    }
+    return {
+      on: this.streetNames[on],
+      onDist: Math.sqrt(bd),
+      cross: cross >= 0 ? this.streetNames[cross] : null,
+      crossDist: cross >= 0 ? Math.sqrt(cd) : Infinity,
+    };
   }
 
   _fillArea(el) {
@@ -341,6 +595,11 @@ export class OsmWorld {
                      (Math.floor(along) % 5) < 2;
       this._set(x, y, type, 0, 0, stripe ? F.STRIPE : 0);
     });
+
+    // Label anchors come from the polyline, deliberately NOT from the callback
+    // above: that one touches every cell of every road and has to stay hot.
+    const name = el.tags?.name;
+    if (name) this._roadAnchors(pts, name, NAMED_RANK[kind] ?? 0, el.tags);
 
     if (!foot) {
       // Street lamps every ~11 cells along the kerb.

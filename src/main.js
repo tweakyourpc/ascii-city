@@ -10,6 +10,7 @@ import { Lighting } from './render/materials.js';
 import { renderScene } from './render/raycaster.js';
 import { drawSky } from './render/sky.js';
 import { drawLoading, drawError } from './render/loading.js';
+import { Labels, MODE } from './render/labels.js';
 import { canMoveTo, settle, floorAt } from './collision.js';
 import { julianDay, sunPos, altAz } from './astro.js';
 import {
@@ -36,6 +37,7 @@ const state = {
 };
 
 const traffic = new Traffic(null);
+const labels = new Labels();
 const hud = new Hud({ onLoad: (view) => loadView(view) });
 
 let simTime = Date.now();
@@ -149,6 +151,8 @@ function update(dt) {
   if (input.down('arrowleft')) cam.angle -= 1.8 * dt;
   if (input.down('arrowright')) cam.angle += 1.8 * dt;
 
+  for (let i = input.takeTaps('n'); i > 0; i--) labels.cycle();
+
   // Vertical: Q down, E up, damped so it flies rather than jumps.
   let thrust = 0;
   if (input.down('e')) thrust += 1;
@@ -198,6 +202,7 @@ function draw() {
   renderScene(screen, cam, state.world, light, t);
   drawSky(screen, cam, light, state.site, jd, sp, sunAlt, dayK);
   traffic.draw(screen, cam, light);
+  labels.draw(screen, cam, state.world, light);
   screen.blit();
 
   return sunAlt;
@@ -247,7 +252,13 @@ function frame() {
   update(dt);
   const sunAlt = draw();
 
-  hud.update({ warp, simTime, lon: state.site.lon, sunAlt, cam, screen, fps });
+  hud.update({
+    warp, simTime, lon: state.site.lon, sunAlt, cam, screen, fps,
+    where: state.world.nearestStreet
+      ? state.world.nearestStreet(cam.x, cam.y)
+      : null,
+    labelMode: labels.mode,
+  });
 
   // Keep the URL in step with where you are, so any view can be shared.
   if (now - lastHashSync > 1000) {
@@ -281,4 +292,4 @@ requestAnimationFrame(frame);
 if (initial.bbox) loadView(initial);
 
 // Handy for poking at the engine from the console.
-Object.assign(window, { cam, screen, state, floorAt });
+Object.assign(window, { cam, screen, state, floorAt, labels, MODE });
