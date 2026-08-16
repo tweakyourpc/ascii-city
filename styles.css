@@ -1,0 +1,35 @@
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+#hud {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  font-size: 11px;
+  line-height: 1.8;
+  color: #7ee7ff;
+  z-index: 10;
+  pointer-events: none;
+  text-shadow: 0 0 8px rgba(0, 120, 160, .9);
+}
+
+#hud b { color: #ffd479; font-weight: 400; }
+#hud .dim { color: #3d8fa3; }
+
+#hud input[type="range"] {
+  pointer-events: auto;
+  vertical-align: middle;
+  width: 110px;
+  accent-color: #7ee7ff;
+}
+
+canvas {
+  display: block;
+  background: #000;
+  cursor: crosshair;
+}

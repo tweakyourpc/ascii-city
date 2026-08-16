@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>ASCII City</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="hud">
+  <div><b>WASD</b> move &middot; <b>drag</b> look &middot; <b>Q</b>/<b>E</b> fly down/up
+       &middot; <b>shift</b> boost &middot; <b>[ ]</b> shift an hour</div>
+  <div>time warp <input id="warp" type="range" min="0" max="100" value="0" step="1">
+       <span id="warpv">1x</span> &middot; <span id="clock">--:--</span>
+       <span id="phase" class="dim"></span></div>
+  <div id="loc" class="dim"></div>
+</div>
+<canvas id="c"></canvas>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
