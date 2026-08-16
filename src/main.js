@@ -11,6 +11,9 @@ import { renderScene } from './render/raycaster.js';
 import { drawSky } from './render/sky.js';
 import { drawLoading, drawError } from './render/loading.js';
 import { Labels, MODE } from './render/labels.js';
+import { Panel } from './render/panel.js';
+import { pick, SkyMarks } from './pick.js';
+import { summary, wikiKey } from './wiki.js';
 import { canMoveTo, settle, floorAt } from './collision.js';
 import { julianDay, sunPos, altAz } from './astro.js';
 import {
@@ -38,6 +41,8 @@ const state = {
 
 const traffic = new Traffic(null);
 const labels = new Labels();
+const panel = new Panel();
+const skyMarks = new SkyMarks();
 const hud = new Hud({ onLoad: (view) => loadView(view) });
 
 let simTime = Date.now();
@@ -152,6 +157,7 @@ function update(dt) {
   if (input.down('arrowright')) cam.angle += 1.8 * dt;
 
   for (let i = input.takeTaps('n'); i > 0; i--) labels.cycle();
+  if (input.takeTaps('escape')) panel.close();
 
   // Vertical: Q down, E up, damped so it flies rather than jumps.
   let thrust = 0;
@@ -203,6 +209,7 @@ function draw() {
   drawSky(screen, cam, light, state.site, jd, sp, sunAlt, dayK);
   traffic.draw(screen, cam, light);
   labels.draw(screen, cam, state.world, light);
+  panel.draw(screen, cam, state.world);
   screen.blit();
 
   return sunAlt;
@@ -252,6 +259,9 @@ function frame() {
   update(dt);
   const sunAlt = draw();
 
+  const clicked = input.takeClick();
+  if (clicked) handleClick(clicked);
+
   hud.update({
     warp, simTime, lon: state.site.lon, sunAlt, cam, screen, fps,
     where: state.world.nearestStreet
@@ -269,6 +279,39 @@ function frame() {
   }
 
   requestAnimationFrame(frame);
+}
+
+/* -------------------------------- picking -------------------------------- */
+
+function handleClick(c) {
+  const r = canvas.getBoundingClientRect();
+  const col = Math.floor((c.x - r.left) / screen.cw);
+  const row = Math.floor((c.y - r.top) / screen.ch);
+
+  // A click on the panel itself dismisses it rather than picking through it.
+  const box = panel.rect(screen);
+  if (box && col >= box.x && col < box.x + box.w &&
+      row >= box.y && row < box.y + box.h) {
+    panel.close();
+    return;
+  }
+
+  const hit = pick(screen, cam, state.world, col, row, skyMarks);
+  if (!hit) { panel.close(); return; }
+  panel.select(hit);
+
+  if (hit.kind === 'building') {
+    const key = wikiKey(hit.b.tags);
+    if (key) {
+      panel.wiki = { state: 'pending', text: '' };
+      const token = hit.b;
+      summary(key, (v) => {
+        if (panel.hit && panel.hit.b === token) {
+          panel.wiki = v ? { state: 'ok', text: v.text } : { state: 'none', text: '' };
+        }
+      });
+    }
+  }
 }
 
 /* --------------------------------- boot --------------------------------- */
@@ -292,4 +335,4 @@ requestAnimationFrame(frame);
 if (initial.bbox) loadView(initial);
 
 // Handy for poking at the engine from the console.
-Object.assign(window, { cam, screen, state, floorAt, labels, MODE });
+Object.assign(window, { cam, screen, state, floorAt, labels, panel, MODE, pick });

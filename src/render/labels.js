@@ -19,7 +19,15 @@ const TAN_HALF = Math.tan(FOV / 2) * 1.04;   // slight pad, so labels don't pop
 const FAR = FOG_FULL * 0.7;
 const NEAR = 6;
 const STREET_CAP = 8;
-const LANDMARK_CAP = 5;
+const LANDMARK_CAP = 4;
+// Some OSM names are a sentence. "Algonquin Hotel Times Square Autograph
+// Collection" is 48 characters and takes a third of the screen.
+const MAX_NAME = 26;
+
+function short(name) {
+  const s = name.toUpperCase();
+  return s.length <= MAX_NAME ? s : s.slice(0, MAX_NAME - 1).replace(/[ .,-]+$/, '') + '.';
+}
 
 export const MODE = { OFF: 0, STREETS: 1, ALL: 2 };
 
@@ -132,7 +140,7 @@ export class Labels {
     let placed = 0;
     for (let k = 0; k < order.length && placed < STREET_CAP; k++) {
       const nm = order[k];
-      const text = ` ${world.streetNames[nm].toUpperCase()} `;
+      const text = ` ${short(world.streetNames[nm])} `;
       const d = this.dist[nm];
       const f = Math.max(0.10, fogOf(d));
       const colour = L.depth(198 * L.amb + 46, 210 * L.amb + 48, 226 * L.amb + 52, f);
@@ -193,7 +201,7 @@ export class Labels {
       const c = cands[i];
       const f = Math.max(0.14, fogOf(c.along));
       const colour = L.depth(255, 206 * L.amb + 30, 130 * L.amb + 20, f);
-      const text = ` ${c.b.name.toUpperCase()} `;
+      const text = ` ${short(c.b.name)} `;
       const x = Math.round(screen.cols / 2 + c.side / c.along * cam.proj
                            - text.length / 2);
       if (this._place(screen, x, c.row, text, colour, c.testD, 3)) placed++;
@@ -231,23 +239,22 @@ export class Labels {
         // A street label's row is by construction the row whose floor-cast
         // distance equals the anchor's, so an exact test fails on rounding for
         // exactly the cells that should pass. Hence the bias.
-        // Count only real glyphs: padding must not vouch for legibility.
+        // All or nothing. Skipping individual occluded characters leaves the
+        // city texture showing between the letters, so "WEST 42ND STREET"
+        // comes out as "WEST 42N=+STREET" and reads as corruption rather than
+        // as depth. If it does not fit cleanly here, nudge and try again.
         let ink = 0;
-        let vis = 0;
+        let hidden = 0;
         for (let i = 0; i < len; i++) {
           if (text[i] === ' ') continue;
           ink++;
-          if (d <= depth[base + x + i] * 1.02 + 0.5) vis++;
+          if (d > depth[base + x + i] * 1.02 + 0.5) { hidden++; break; }
         }
-        if (ink === 0 || vis < ink * 0.72) continue;
+        if (ink === 0 || hidden > 0) continue;
 
-        for (let i = 0; i < len; i++) {
-          if (d > depth[base + x + i] * 1.02 + 0.5) continue;
-          // Spaces are written as blanks rather than skipped. Letting the
-          // ground texture show through the gaps turns "WEST 46TH STREET"
-          // into "WEST.46TH:STREET", which reads as corruption.
-          screen.set(x + i, yy, text[i], colour);
-        }
+        // Spaces are written as blanks rather than skipped, for the same
+        // reason: ground texture in the gaps between words reads as letters.
+        for (let i = 0; i < len; i++) screen.set(x + i, yy, text[i], colour);
         for (let i = x0; i < x1; i++) {
           this.mask[base + i] = 1;
           if (yy > 0) this.mask[base - cols + i] = 1;

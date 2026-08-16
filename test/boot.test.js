@@ -80,6 +80,7 @@ function installDom() {
     set innerHTML(v) { this._text = String(v); }
     get innerHTML() { return this._text; }
     getContext() { return ctx; }
+    getBoundingClientRect() { return { left: 0, top: 0, width: 1280, height: 720 }; }
   }
 
   const ctx = {
@@ -107,6 +108,8 @@ function installDom() {
   globalThis.window = {
     innerWidth: 1280,
     innerHeight: 720,
+    panel: null,
+    labels: null,
     addEventListener: (k, fn) => {
       if (!windowListeners.has(k)) windowListeners.set(k, []);
       windowListeners.get(k).push(fn);
@@ -160,6 +163,23 @@ function installDom() {
     },
     counts: () => ({ fillText, fillRect }),
     fetchCalls: () => fetchCalls,
+    mouse: (x, y) => {
+      const c = els.get('c');
+      c.fire('mousedown', { clientX: x, clientY: y });
+      for (const fn of windowListeners.get('mouseup') || []) {
+        fn({ clientX: x, clientY: y });
+      }
+    },
+    drag: (x, y) => {
+      const c = els.get('c');
+      c.fire('mousedown', { clientX: x, clientY: y });
+      for (const fn of windowListeners.get('mousemove') || []) {
+        fn({ clientX: x + 40, clientY: y + 40 });
+      }
+      for (const fn of windowListeners.get('mouseup') || []) {
+        fn({ clientX: x + 40, clientY: y + 40 });
+      }
+    },
   };
 }
 
@@ -219,6 +239,37 @@ test('valid coordinates load a city and become a shareable URL hash', async () =
   assert.match(dom.el('attrib').textContent, /OpenStreetMap/,
     `attribution missing after load: "${dom.el('attrib').textContent}"`);
   assert.equal(dom.el('attrib').className, 'dim', 'load reported an error');
+});
+
+test('a click opens the identify panel, a drag does not', () => {
+  const panel = globalThis.window.panel;
+  assert.ok(panel, 'main.js did not expose the panel');
+  assert.equal(panel.open, false);
+
+  // A drag must never be read as a click.
+  dom.drag(400, 300);
+  dom.pump(2);
+  assert.equal(panel.open, false, 'a drag opened the panel');
+
+  // A click on the scene should identify something.
+  dom.mouse(400, 300);
+  dom.pump(2);
+  assert.equal(panel.open, true, 'a click did not open the panel');
+  assert.ok(['building', 'ground', 'sky'].includes(panel.hit.kind));
+
+  // Escape closes it.
+  dom.key('escape');
+  dom.pump(2);
+  assert.equal(panel.open, false, 'escape did not close the panel');
+});
+
+test('N cycles the label layer', () => {
+  const labels = globalThis.window.labels;
+  assert.ok(labels, 'main.js did not expose the label layer');
+  const before = labels.mode;
+  dom.key('n');
+  dom.pump(2);
+  assert.notEqual(labels.mode, before, 'N did not change the label mode');
 });
 
 test('the loaded world renders without throwing', () => {
