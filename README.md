@@ -2,12 +2,12 @@
 
 # ASCII City
 
-A 3D city renderer that draws to text. No WebGL, no shaders, no dependencies, 
+A 3D city renderer that draws to text. No WebGL, no shaders, no dependencies:
 just a raycaster writing coloured characters into a grid, blitted to a 2D canvas.
 
-The sky is not decoration. Sun position and star positions are computed from real
-astronomy, Julian day, solar right ascension and declination, local sidereal
-time, so day and night arrive when they actually would, for the latitude and
+The sky is not decoration. Sun and star positions are computed from real
+astronomy (Julian day, solar right ascension and declination, local sidereal
+time), so day and night arrive when they actually would, for the latitude and
 longitude you are standing at.
 
 > **Status:** early. The engine works; the OpenStreetMap integration and the
@@ -24,8 +24,8 @@ rather than tens of thousands. Depth fog, per-material glyph ramps, and a
 single-watermark occlusion scheme that exploits the fact that a height field seen
 from outside always covers a bottom-anchored span of each column.
 
-**World.** An infinite procedural city generated from a hash function, no
-storage, no seed file, just coordinates in and terrain out. A park at the centre
+**World.** An infinite procedural city generated from a hash function. No
+storage, no seed file: just coordinates in and terrain out. A park at the centre
 gives the skyline something to stand behind, then concentric rings of towers,
 houses, farmland, forest and water, laid over a block grid with roads,
 sidewalks, street trees and lamp-glow falloff.
@@ -37,7 +37,7 @@ hour-scrub keys, so you can watch a day pass in ten seconds.
 
 **Traffic.** Cars and pedestrians route the street grid, pick new headings at
 junctions, hug the correct side of the road, and are drawn as depth-sorted ASCII
-sprites, headlights white when coming toward you, tail lights red going away.
+sprites: headlights white when coming toward you, tail lights red going away.
 
 ## Running it
 
@@ -49,7 +49,7 @@ python3 -m http.server 8000   # or: npx serve .
 
 Then open <http://localhost:8000>.
 
-A static server is required, the engine is built from ES modules, and browsers
+A static server is required: the engine is built from ES modules, and browsers
 refuse to load modules over `file://`. The pre-refactor single-file version in
 `legacy/ascii-city.html` has no such requirement and can be opened directly.
 

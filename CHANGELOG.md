@@ -19,7 +19,7 @@ change after this point is a reviewable diff against a known-good starting state
 - ASCII raycast renderer: per-column DDA against a height field for building
   facades, floor casting for the ground plane, depth fog, and run-length batched
   text blitting to a 2D canvas.
-- Infinite procedural city generated from a hash function, central park, tower
+- Infinite procedural city generated from a hash function: central park, tower
   district, houses, farmland, forest and water in concentric rings, over a
   14-cell block grid with roads, sidewalks, street trees and lamp glow.
 - Astronomically correct sky: Julian day, solar right ascension and declination,
