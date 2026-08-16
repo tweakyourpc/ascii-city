@@ -129,7 +129,9 @@ export class Labels {
       if (s > this.score[nm]) {
         this.score[nm] = s;
         this.best[nm] = i;
-        this.col[nm] = cols / 2 + sideRatio * cam.proj;
+        // `side` is positive to the LEFT (fwd rotated counter-clockwise), so
+        // it subtracts. Same handedness as camera.buildRays.
+        this.col[nm] = cols / 2 - sideRatio * cam.proj;
         this.row[nm] = row;
         this.dist[nm] = along;
       }
@@ -202,7 +204,7 @@ export class Labels {
       const f = Math.max(0.14, fogOf(c.along));
       const colour = L.depth(255, 206 * L.amb + 30, 130 * L.amb + 20, f);
       const text = ` ${short(c.b.name)} `;
-      const x = Math.round(screen.cols / 2 + c.side / c.along * cam.proj
+      const x = Math.round(screen.cols / 2 - c.side / c.along * cam.proj
                            - text.length / 2);
       if (this._place(screen, x, c.row, text, colour, c.testD, 3)) placed++;
     }

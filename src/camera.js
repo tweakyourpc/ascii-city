@@ -57,7 +57,13 @@ export class Camera {
 
     const { cols } = screen;
     for (let i = 0; i < cols; i++) {
-      const a = this.angle - FOV / 2 + (i + 0.5) / cols * FOV;
+      // Screen columns increase to the right, and angles increase
+      // counter-clockwise, so the fan must run DOWN across the screen: the
+      // left edge looks further counter-clockwise than the right. Running it
+      // the other way mirrors the whole world horizontally, which on a
+      // symmetric procedural city is invisible and on real map data puts the
+      // buildings from one side of a street on the other.
+      const a = this.angle + FOV / 2 - (i + 0.5) / cols * FOV;
       this.rc[i] = Math.cos(a);
       this.rs[i] = Math.sin(a);
       this.rinv[i] = 1 / Math.cos(a - this.angle);

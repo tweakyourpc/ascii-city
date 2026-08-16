@@ -313,7 +313,7 @@ export class Traffic {
         tpl = PED_LOD[lod][phase];
       }
 
-      const cx = cols / 2 + Math.tan(ang) * cam.proj;
+      const cx = cols / 2 - Math.tan(ang) * cam.proj;
       const wcols = Math.max(1, wWorld * cam.proj / dp);
       const x0 = cx - wcols / 2;
       const f = Math.max(0.12, fogOf(dp));

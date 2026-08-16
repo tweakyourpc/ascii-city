@@ -59,7 +59,8 @@ export function pick(screen, cam, world, col, row, skyMarks) {
  * "nothing here".
  */
 export function unproject(screen, cam, x, y) {
-  const da = Math.atan2(x + 0.5 - screen.cols / 2, screen.proj);
+  // Inverse of sky.js project(), including its handedness.
+  const da = Math.atan2(-(x + 0.5 - screen.cols / 2), screen.proj);
   const az = ((90 - (cam.angle + da) * 180 / Math.PI) % 360 + 360) % 360;
   const alt = Math.atan2(cam.hz - y, screen.vscale) * 180 / Math.PI;
   return { az, alt };

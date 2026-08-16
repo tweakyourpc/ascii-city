@@ -136,7 +136,9 @@ function update(dt) {
   const world = state.world;
   const look = input.takeLook();
   if (look.x || look.y) {
-    cam.angle += look.x * 0.004;
+    // Dragging right turns right, which is clockwise, which is a decreasing
+    // angle. See camera.buildRays for why the sign is what it is.
+    cam.angle -= look.x * 0.004;
     // Wide enough to look straight down at the city from altitude.
     cam.pitch = Math.max(-screen.rows * 0.9,
                  Math.min(screen.rows * 1.5, cam.pitch - look.y * 0.35));
@@ -151,10 +153,10 @@ function update(dt) {
   let my = 0;
   if (input.down('w') || input.down('arrowup')) { mx += fx; my += fy; }
   if (input.down('s') || input.down('arrowdown')) { mx -= fx; my -= fy; }
-  if (input.down('a')) { mx += fy; my -= fx; }
-  if (input.down('d')) { mx -= fy; my += fx; }
-  if (input.down('arrowleft')) cam.angle -= 1.8 * dt;
-  if (input.down('arrowright')) cam.angle += 1.8 * dt;
+  if (input.down('a')) { mx -= fy; my += fx; }     // strafe left
+  if (input.down('d')) { mx += fy; my -= fx; }     // strafe right
+  if (input.down('arrowleft')) cam.angle += 1.8 * dt;
+  if (input.down('arrowright')) cam.angle -= 1.8 * dt;
 
   for (let i = input.takeTaps('n'); i > 0; i--) labels.cycle();
   if (input.takeTaps('escape')) panel.close();

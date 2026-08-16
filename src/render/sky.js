@@ -13,7 +13,9 @@ export function project(screen, cam, azDeg, altDeg) {
   const da = normAngle(theta - cam.angle);
   if (Math.abs(da) > FOV * 0.7) return null;
 
-  const x = Math.round(screen.cols / 2 + Math.tan(da) * screen.proj);
+  // Negative because a positive angular offset is counter-clockwise, which is
+  // to the LEFT, which is a smaller column. See camera.buildRays.
+  const x = Math.round(screen.cols / 2 - Math.tan(da) * screen.proj);
   const y = Math.round(cam.hz - Math.tan(Math.min(85, altDeg) * Math.PI / 180) * screen.vscale);
   if (x < 0 || x >= screen.cols || y < 0 || y >= screen.rows) return null;
   return { x, y };
