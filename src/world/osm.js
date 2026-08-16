@@ -141,7 +141,8 @@ export class OsmWorld {
     this.bid = new Uint16Array(n + 1);
 
     this.roadCells = [];
-    this.stats = { buildings: 0, roads: 0, water: 0, green: 0, skipped: 0 };
+    this.pois = [];
+    this.stats = { buildings: 0, roads: 0, water: 0, green: 0, pois: 0, skipped: 0 };
 
     /* --- identification tables, all populated during rasterization --- */
     this.buildings = [null];        // index 0 is the "no building" sentinel
@@ -224,6 +225,23 @@ export class OsmWorld {
 
     for (const el of elements) {
       const tags = el.tags || {};
+      // Standalone points of interest: cafes, shops, subway entrances.
+      if (el.type === 'node' && el.lat !== undefined &&
+          (tags.amenity || tags.shop || tags.tourism || tags.railway)) {
+        const x = this.proj.x(el.lon);
+        const y = this.proj.y(el.lat);
+        if (x >= 0 && x < this.width && y >= 0 && y < this.height) {
+          this.pois.push({
+            x, y, tags,
+            name: tags.name || null,
+            kind: tags.railway === 'subway_entrance' ? 'subway'
+                : tags.amenity ? 'amenity'
+                : tags.shop ? 'shop' : 'tourism',
+            osm: `node/${el.id}`,
+          });
+        }
+        continue;
+      }
       if (tags.building || tags['building:part']) buildings.push(el);
       else if (tags.highway) roads.push(el);
       else if (tags.waterway) waterways.push(el);
@@ -261,6 +279,7 @@ export class OsmWorld {
       }
     }
 
+    this.stats.pois = this.pois.length;
     this._finishAnchors();
     this._findLandmarks();
   }
@@ -488,6 +507,18 @@ export class OsmWorld {
     this.landmarks.sort((a, z) => this.buildings[z].h - this.buildings[a].h);
     this.stats.landmarks = this.landmarks.length;
     this.stats.named = this.buildings.filter((b) => b && b.name).length;
+  }
+
+  /** The nearest named point of interest to a world point, within `r` cells. */
+  nearestPoi(x, y, r = 4) {
+    let best = null;
+    let bd = r * r;
+    for (let i = 0; i < this.pois.length; i++) {
+      const p = this.pois[i];
+      const d = (p.x - x) ** 2 + (p.y - y) ** 2;
+      if (d < bd) { bd = d; best = p; }
+    }
+    return best;
   }
 
   /** Squared distance from a point to segment i of the named-road set. */

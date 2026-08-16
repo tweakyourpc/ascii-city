@@ -49,6 +49,7 @@ export function pick(screen, cam, world, col, row, skyMarks) {
     x: wx, y: wy, d,
     type: world.type[s],
     street: world.nearestStreet ? world.nearestStreet(wx, wy) : null,
+    poi: world.nearestPoi ? world.nearestPoi(wx, wy) : null,
   };
 }
 

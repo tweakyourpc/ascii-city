@@ -20,7 +20,7 @@ import { FOV, HORIZON_FRAC } from '../src/config.js';
 
 const BBOX = [40.7500, -73.9900, 40.7600, -73.9780];
 
-function world() {
+function world(extra = []) {
   return new OsmWorld(BBOX, [
     {
       type: 'way', id: 1, tags: { highway: 'primary', name: 'Test Avenue' },
@@ -42,6 +42,7 @@ function world() {
         { lat: 40.7558, lon: -73.9843 },
       ],
     },
+    ...extra,
   ], 'Pick City');
 }
 
@@ -374,4 +375,35 @@ test('a wikidata id is resolved to an article before the summary', async () => {
   assert.equal(urls.length, 2);
   assert.match(urls[0], /wikidata\.org.*origin=\*/, 'CORS param missing');
   assert.match(urls[1], /Empire_State_Building/);
+});
+
+
+test('a ground pick surfaces a nearby point of interest', () => {
+  const w = world([{
+    type: 'node', id: 950, lat: 40.7540, lon: -73.9840,
+    tags: { amenity: 'library', name: 'Reading Room', opening_hours: '09:00-17:00' },
+  }]);
+  assert.equal(w.pois.length, 1);
+
+  const px = w.proj.x(-73.9840);
+  const py = w.proj.y(40.7540);
+  const hit = {
+    kind: 'ground', x: px, y: py, d: 20,
+    type: w.type[w.sample(px, py)],
+    street: w.nearestStreet(px, py),
+    poi: w.nearestPoi(px, py),
+  };
+  assert.ok(hit.poi, 'no POI resolved at its own coordinates');
+  assert.equal(hit.poi.name, 'Reading Room');
+
+  const screen = makeScreen(120, 36);
+  const cam = new Camera();
+  cam.x = px; cam.y = py - 20; cam.z = 2; cam.hz = 18;
+  cam.buildRays(screen);
+  const p = new Panel();
+  p.select(hit);
+  const text = panelText(p, screen, cam, w);
+  assert.match(text, /READING ROOM/);
+  assert.match(text, /09:00-17:00/);
+  assert.match(text, /node\/950/);
 });

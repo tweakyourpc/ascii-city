@@ -84,6 +84,16 @@ export function buildQuery([s, w, n, e], layer = 'core') {
 );
 out geom;`;
   }
+  if (layer === 'poi') {
+    return `[out:json][timeout:60];
+(
+  node["amenity"]["name"](${bbox});
+  node["shop"]["name"](${bbox});
+  node["tourism"]["name"](${bbox});
+  node["railway"="subway_entrance"](${bbox});
+);
+out;`;
+  }
   return `[out:json][timeout:60];
 (
   way["waterway"~"^(river|canal|stream)$"](${bbox});
@@ -180,12 +190,18 @@ function slim(elements) {
   for (const el of elements) {
     if (!el.tags) continue;
     const o = { type: el.type, id: el.id, tags: el.tags };
+    // Standalone POI nodes carry lat/lon rather than a geometry array. Without
+    // this they are dropped here and the POI layer silently fetches nothing.
+    if (el.type === 'node' && el.lat !== undefined) {
+      o.lat = el.lat;
+      o.lon = el.lon;
+    }
     if (el.geometry) o.geometry = el.geometry;
     if (el.members) {
       const rings = el.members.filter((m) => m.geometry && m.geometry.length > 2);
       if (rings.length) o.members = rings.map((m) => ({ role: m.role, geometry: m.geometry }));
     }
-    if (o.geometry || o.members) out.push(o);
+    if (o.geometry || o.members || o.lat !== undefined) out.push(o);
   }
   return out;
 }
@@ -291,7 +307,16 @@ export async function fetchOsm(bbox, { onProgress = () => {}, signal } = {}) {
     onProgress('Skipped water and parks');
   }
 
-  const elements = slim(core.concat(extra));
+  let pois = [];
+  try {
+    pois = await runQuery(buildQuery(bbox, 'poi'),
+      { onProgress, signal, label: 'places' });
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    onProgress('Skipped places');
+  }
+
+  const elements = slim(core.concat(extra, pois));
   writeCache(bbox, elements);
   return elements;
 }

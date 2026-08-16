@@ -254,6 +254,65 @@ test('preset boxes are within the area cap', () => {
   }
 });
 
+/* --------------------------- points of interest --------------------------- */
+
+test('the POI query asks for standalone nodes', () => {
+  const q = buildQuery([40.74, -74, 40.76, -73.98], 'poi');
+  assert.match(q, /node\["amenity"\]\["name"\]/);
+  assert.match(q, /node\["shop"\]\["name"\]/);
+  assert.match(q, /node\["railway"="subway_entrance"\]/);
+  // Nodes have no geometry to ask for.
+  assert.doesNotMatch(q, /out geom/);
+});
+
+test('POI nodes rasterize into the world', () => {
+  const w = buildWorld([
+    {
+      type: 'node', id: 900, lat: 40.7570, lon: -73.9850,
+      tags: { amenity: 'cafe', name: 'Corner Cafe', opening_hours: 'Mo-Fr 07:00-18:00' },
+    },
+    {
+      type: 'node', id: 901, lat: 40.7575, lon: -73.9845,
+      tags: { railway: 'subway_entrance', name: '42 St entrance' },
+    },
+    {
+      type: 'node', id: 902, lat: 40.7580, lon: -73.9840,
+      tags: { shop: 'books', name: 'The Bookshop' },
+    },
+  ]);
+
+  assert.equal(w.pois.length, 3, `captured ${w.pois.length} POIs`);
+  const kinds = w.pois.map((p) => p.kind).sort();
+  assert.deepEqual(kinds, ['amenity', 'shop', 'subway']);
+
+  const cafe = w.pois.find((p) => p.name === 'Corner Cafe');
+  assert.ok(cafe);
+  assert.equal(cafe.osm, 'node/900');
+  assert.equal(cafe.tags.opening_hours, 'Mo-Fr 07:00-18:00');
+  // Projected to the right place.
+  assert.ok(Math.abs(cafe.x - w.proj.x(-73.9850)) < 1e-6);
+  assert.ok(Math.abs(cafe.y - w.proj.y(40.7570)) < 1e-6);
+});
+
+test('a POI outside the extract is dropped, not clamped to the edge', () => {
+  const w = buildWorld([{
+    type: 'node', id: 903, lat: 41.5, lon: -70.0, tags: { amenity: 'cafe', name: 'Far Away' },
+  }]);
+  assert.equal(w.pois.length, 0);
+});
+
+test('nearestPoi finds a point of interest, and only a close one', () => {
+  const w = buildWorld([{
+    type: 'node', id: 904, lat: 40.7570, lon: -73.9850,
+    tags: { amenity: 'library', name: 'City Library' },
+  }]);
+  const x = w.proj.x(-73.9850);
+  const y = w.proj.y(40.7570);
+  assert.equal(w.nearestPoi(x + 1, y + 1).name, 'City Library');
+  assert.equal(w.nearestPoi(x + 60, y + 60), null,
+    'a distant click must not snap to a POI');
+});
+
 test('the query asks for inline geometry', () => {
   const q = buildQuery([40.74, -74, 40.76, -73.98], 'core');
   assert.match(q, /out geom;/);

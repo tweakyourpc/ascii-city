@@ -129,12 +129,22 @@ export class Panel {
       L.footer = b.osm;
     } else if (hit.kind === 'ground') {
       const st = hit.street;
-      L.title = st && st.on ? st.on : (GROUND_NAME[hit.type] || 'Ground');
-      L.sub = st && st.cross ? `near ${st.cross}` : (GROUND_NAME[hit.type] || '');
+      const poi = hit.poi;
+      L.title = poi && poi.name
+        ? poi.name
+        : (st && st.on ? st.on : (GROUND_NAME[hit.type] || 'Ground'));
+      L.sub = poi && poi.name
+        ? (st && st.on ? `${pretty(poi.tags.amenity || poi.tags.shop
+            || poi.tags.tourism || poi.kind) || poi.kind} · ${st.on}` : poi.kind)
+        : (st && st.cross ? `near ${st.cross}` : (GROUND_NAME[hit.type] || ''));
+      if (poi) {
+        kv('Hours', poi.tags.opening_hours);
+        kv('Operator', poi.tags.operator || poi.tags.brand);
+      }
       kv('Surface', GROUND_NAME[hit.type] || '-');
       kv('Distance', `${Math.round(hit.d * METERS_PER_CELL)} m · ` +
         `${wind(bearingTo(cam, hit.x, hit.y))}`);
-      L.footer = world && world.label ? world.label : '';
+      L.footer = hit.poi ? hit.poi.osm : (world && world.label ? world.label : '');
     } else {
       const o = hit.object;
       L.title = o ? o.name : 'Sky';
