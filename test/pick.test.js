@@ -57,6 +57,10 @@ function makeScreen(cols, rows) {
     colour: new Array(cols * rows),
     depth: new Float32Array(cols * rows),
     skyEnd: new Int32Array(cols),
+    covWords: ((rows + 31) >> 5),
+    cov: new Uint32Array((rows + 31) >> 5),
+    hasHoles: new Uint8Array(cols),
+    holeMask: new Uint32Array(cols * ((rows + 31) >> 5)),
     scrims: [],
     set(x, y, g, c) {
       if (x < 0 || x >= cols || y < 0 || y >= rows) return;

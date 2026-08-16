@@ -7,6 +7,42 @@ import {
 
 const FAR = Math.min(MAXD, FOG_FULL);
 
+/* ------------------------- per-column coverage -------------------------
+ * Uint32Array reads are unsigned but `<<` yields a signed int, so every
+ * comparison below normalises with `>>> 0`. Getting that wrong breaks only
+ * the top bit of each word, which is exactly the kind of bug that survives
+ * casual testing.
+ */
+
+const ALL = 0xffffffff;
+
+function setRange(m, a, b) {
+  if (a >= b) return;
+  const wa = a >> 5;
+  const wb = (b - 1) >> 5;
+  const ma = (ALL << (a & 31)) >>> 0;
+  const mb = (ALL >>> (31 - ((b - 1) & 31))) >>> 0;
+  if (wa === wb) { m[wa] |= (ma & mb) >>> 0; return; }
+  m[wa] |= ma;
+  for (let w = wa + 1; w < wb; w++) m[w] = ALL;
+  m[wb] |= mb;
+}
+
+function rangeFull(m, a, b) {
+  if (a >= b) return true;
+  const wa = a >> 5;
+  const wb = (b - 1) >> 5;
+  const ma = (ALL << (a & 31)) >>> 0;
+  const mb = (ALL >>> (31 - ((b - 1) & 31))) >>> 0;
+  if (wa === wb) {
+    const k = (ma & mb) >>> 0;
+    return ((m[wa] & k) >>> 0) === k;
+  }
+  if (((m[wa] & ma) >>> 0) !== ma) return false;
+  for (let w = wa + 1; w < wb; w++) if (m[w] !== ALL) return false;
+  return ((m[wb] & mb) >>> 0) === mb;
+}
+
 // The real termination is the distance break below; this only catches a
 // degenerate ray direction. Cells crossed to reach Euclidean distance t is at
 // most about 1.42t, and t is at most FAR / cos(FOV/2).
@@ -56,6 +92,112 @@ function castFloor(screen, cam, world, L, t) {
         groundColour(world, s, f, L),
         dPerp);
     }
+  }
+}
+
+/**
+ * A tree or a patch of woodland, drawn as a see-through ellipsoid canopy.
+ *
+ * The facade code derives a sub-cell offset `u` from the wall face it hit,
+ * which is the wrong quantity for a round object: it measures along one side
+ * of the cell, not out from the trunk. What a canopy needs is the ray's
+ * perpendicular distance to the cell's centre axis, which is one 2D cross
+ * product with the unit ray direction.
+ */
+function drawCanopy(screen, cam, world, L, cov, col, mapX, mapY,
+                    rdx, rdy, prev, next, cosC, h, type, rnd, depthIdx,
+                    hz, vscale, camZ) {
+  const rows = screen.rows;
+  const forest = type === T.FOREST;
+
+  const cx = mapX + 0.5;
+  const cy = mapY + 0.5;
+  const px = cam.x + rdx * prev;
+  const py = cam.y + rdy * prev;
+  const ex = cx - px;
+  const ey = cy - py;
+
+  const q = Math.abs(ex * rdy - ey * rdx);       // radial offset from the axis
+  const sStar = ex * rdx + ey * rdy;             // closest approach along ray
+  const pcx = px + rdx * sStar;
+  const pcy = py + rdy * sStar;
+
+  // The crown cannot leave its own cell: the DDA only visits cells the ray
+  // actually crosses, so a wider radius is clipped straight back into a box.
+  // 0.62 reaches the cell's corners, which is the practical maximum.
+  //
+  // At 2.37 m per cell that caps a lone tree's crown at about 3 m across,
+  // which is small for a real tree. Woodland does not have the problem:
+  // T.FOREST cells are contiguous, so neighbouring crowns merge into one
+  // canopy. A crown that spans cells would need the world format to mark
+  // cells adjacent to a tree, which would change the procedural output.
+  const rx = forest ? 0.52 : 0.60;
+  const trunkR = forest ? 0.05 : 0.07 + 0.03 * rnd;
+  const zc = h * (forest ? 0.62 : 0.70);
+  const rz = h * (forest ? 0.42 : 0.32);
+
+  const qq = (q / rx) * (q / rx);
+  if (qq >= 1 && q > trunkR) return;             // misses crown and trunk both
+
+  const d0 = prev * cosC;
+  const d1 = next * cosC;
+  const dm = Math.max(0.25, (d0 + d1) * 0.5);
+  const f2 = fogOf(dm);
+  const invS = dm / vscale;
+
+  let yTopV = Math.ceil(cam.rowOf(zc + rz, dm) - 0.5);
+  let yBotV = Math.ceil(cam.rowOf(0, dm) - 0.5);
+  if (yTopV < 0) yTopV = 0;
+  if (yBotV > rows) yBotV = rows;
+
+  // Distant foliage must read solid, both because it looks right and because
+  // a forest has to terminate rays instead of letting every column run to the
+  // fog limit. Depth of vegetation already traversed does the same job.
+  let dens = forest ? 1.0 - 0.42 * qq : 0.96 - 0.66 * qq;
+  if (dm > 26) dens += (dm - 26) / 46;
+  if (depthIdx > 3) dens = 1;
+  if (dens > 1) dens = 1;
+
+  const amb = L.amb;
+
+  for (let yy = yTopV; yy < yBotV; yy++) {
+    if ((cov[yy >> 5] >>> (yy & 31)) & 1) continue;
+    const z = camZ - (yy + 0.5 - hz) * invS;
+    if (z < 0) continue;
+
+    const w = (z - zc) / rz;
+    const e = qq + w * w;
+
+    if (e >= 1) {
+      if (q < trunkR && z < zc - rz * 0.3) {
+        screen.setDepth(col, yy, '|',
+          L.depth(74 * amb, 54 * amb, 34 * amb, f2), dm);
+        cov[yy >> 5] |= 1 << (yy & 31);
+      }
+      continue;
+    }
+
+    // Key the gap noise on the world-space point where the ray meets the
+    // canopy surface, not on the screen row. Keyed on the ray, the leaves
+    // crawl like television static as the camera moves.
+    const tt = rx * Math.sqrt(1 - e);
+    const sx = pcx - rdx * tt;
+    const sy = pcy - rdy * tt;
+
+    const n = hash((sx * 2.6) | 0, (((sy * 2.6) | 0) * 131) + ((z * 2.2) | 0), 0);
+    if (n >= dens) continue;                     // a gap: draw nothing, mark nothing
+
+    const r = hash((sx * 5) | 0, (((sy * 5) | 0) * 7) + ((z * 4) | 0), 11);
+    const ch = e < 0.32 ? (r < 0.5 ? '@' : '%')
+             : e < 0.72 ? (r < 0.34 ? '&' : r < 0.72 ? '%' : '*')
+             : (r < 0.5 ? '*' : r < 0.85 ? '+' : '.');
+    const top = 0.72 + 0.42 * Math.max(0, -w);   // crowns are lit from above
+
+    screen.setDepth(col, yy, ch,
+      L.depth((36 + r * 26) * amb * top,
+              (98 + r * 74) * amb * top,
+              (40 + r * 28) * amb * top, f2), dm);
+    cov[yy >> 5] |= 1 << (yy & 31);
   }
 }
 
@@ -112,6 +254,14 @@ function castWorld(screen, cam, world, L, t) {
     let side = 0;
     let dCut = Infinity;
 
+    // `pure` means every cell so far has been opaque, so the covered set is
+    // still the bottom-anchored interval [yTop, rows) and the original scalar
+    // code is exact. A frame with no vegetation never touches the mask, and
+    // produces bit-identical output to before this existed.
+    let pure = true;
+    let veg = 0;
+    const cov = screen.cov;
+
     for (let guard = 0; guard < GUARD_MAX; guard++) {
       const next = sX < sY ? sX : sY;
       const s = world.sample(mapX, mapY);
@@ -122,6 +272,7 @@ function castWorld(screen, cam, world, L, t) {
         // finding the roof outline below samples neighbours, which invalidates
         // the slot.
         const type = world.type[s];
+        const isVegCell = type === T.TREE || type === T.FOREST;
         const rnd = world.rnd[s];
         const palIdx = world.pal[s];
         const flags = world.flags[s];
@@ -147,7 +298,35 @@ function castWorld(screen, cam, world, L, t) {
           yS = rows;
           yB = rows;
         }
-        if (yB > yTop) yB = yTop;
+        if (isVegCell) {
+          if (pure) {
+            // Promote once, seeding the mask from the scalar watermark so no
+            // coverage is lost at the transition.
+            cov.fill(0);
+            setRange(cov, Math.max(0, yTop), rows);
+            pure = false;
+          }
+          veg++;
+          drawCanopy(screen, cam, world, L, cov, col, mapX, mapY,
+                     rdx, rdy, prev, next, cosC, h, type, rnd, veg, hz, vscale, camZ);
+          if (yA < yTop) yTop = yA;
+          if (yTop <= 0 && pure) break;
+          if (next > FAR) break;
+          if (!pure) {
+            const dEnd = next * cosC;
+            let wTop = Math.ceil(Math.min(cam.rowOf(hMax, dEnd), hz) - 0.5);
+            let wBot = Math.ceil(cam.rowOf(0, dEnd) - 0.5);
+            if (wTop < 0) wTop = 0;
+            if (wBot > rows) wBot = rows;
+            if (rangeFull(cov, wTop, wBot)) break;
+          }
+          if (sX < sY) { sX += ddX; mapX += stepX; side = 0; }
+          else { sY += ddY; mapY += stepY; side = 1; }
+          prev = next;
+          continue;
+        }
+
+        if (pure && yB > yTop) yB = yTop;
         if (yB > rows) yB = rows;
         if (yS > yB) yS = yB;
         if (yS < yA) yS = yA;
@@ -164,6 +343,7 @@ function castWorld(screen, cam, world, L, t) {
 
           const dz = camZ - h;
           for (let yy = yA; yy < yS; yy++) {
+            if (!pure && (cov[yy >> 5] >>> (yy & 31)) & 1) continue;
             const dR = dz * vscale / (yy + 0.5 - hz);
             const dw = dR * cam.rinv[col];
             // wx,wy are for texture only; the material values are already in
@@ -194,6 +374,7 @@ function castWorld(screen, cam, world, L, t) {
           const isVeg = type === T.TREE || type === T.FOREST;
 
           for (let yy = yS; yy < yB; yy++) {
+            if (!pure && (cov[yy >> 5] >>> (yy & 31)) & 1) continue;
             const z = camZ - (yy + 0.5 - hz) * dn / vscale;
             let ch, cc;
 
@@ -248,6 +429,11 @@ function castWorld(screen, cam, world, L, t) {
           }
         }
 
+        // Mark the FULL span, including rows that were skipped because they
+        // were already covered. That idempotence is what replaces the seam
+        // prevention the old yB = min(yB, yTop) clamp was doing.
+        if (!pure) setRange(cov, Math.max(0, yA), yB);
+
         if (yA < yTop) {
           yTop = yA;
           // Exact early-out, valid only while the camera is below the tallest
@@ -267,14 +453,38 @@ function castWorld(screen, cam, world, L, t) {
         }
       }
 
-      if (yTop <= 0 || next > FAR || next * cosC > dCut) break;
+      if (next > FAR) break;
+      if (pure) {
+        if (yTop <= 0 || next * cosC > dCut) break;
+      } else {
+        // Everything at distance >= dEnd projects inside this row window, so
+        // once the window is painted nothing further can be visible. In the
+        // pure case this reduces exactly to dEnd >= dCut, and yTop <= 0
+        // implies it, so it generalises both of the original breaks.
+        const dEnd = next * cosC;
+        let wTop = Math.ceil(Math.min(cam.rowOf(hMax, dEnd), hz) - 0.5);
+        let wBot = Math.ceil(cam.rowOf(0, dEnd) - 0.5);
+        if (wTop < 0) wTop = 0;
+        if (wBot > rows) wBot = rows;
+        if (rangeFull(cov, wTop, wBot)) break;
+      }
 
       if (sX < sY) { sX += ddX; mapX += stepX; side = 0; }
       else { sY += ddY; mapY += stepY; side = 1; }
       prev = next;
     }
 
-    screen.skyEnd[col] = Math.min(yTop, Math.max(0, Math.ceil(hz)));
+    const skyLimit = Math.max(0, Math.ceil(hz));
+    if (pure) {
+      screen.skyEnd[col] = Math.min(yTop, skyLimit);
+    } else {
+      // Above the horizon this column has gaps in it. Hand drawSky the mask so
+      // it can fill the gaps rather than painting one rect up to a watermark.
+      screen.skyEnd[col] = 0;
+      screen.hasHoles[col] = 1;
+      const base = col * screen.covWords;
+      for (let w = 0; w < screen.covWords; w++) screen.holeMask[base + w] = cov[w];
+    }
   }
 }
 

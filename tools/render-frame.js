@@ -68,6 +68,10 @@ const screen = {
   colour: new Array(COLS * ROWS),
   depth: new Float32Array(COLS * ROWS),
   skyEnd: new Int32Array(COLS),
+  covWords: ((ROWS + 31) >> 5),
+  cov: new Uint32Array((ROWS + 31) >> 5),
+  hasHoles: new Uint8Array(COLS),
+  holeMask: new Uint32Array(COLS * ((ROWS + 31) >> 5)),
   set(x, y, g, c) {
     if (x < 0 || x >= COLS || y < 0 || y >= ROWS) return;
     this.glyph[y * COLS + x] = g;

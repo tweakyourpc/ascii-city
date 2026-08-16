@@ -61,12 +61,22 @@ export class Screen {
     this.depth = new Float32Array(n);
     this.skyEnd = new Int32Array(this.cols);
     this.scrims = [];
+
+    // Per-column coverage for the raycaster. `cov` is scratch, reused for
+    // whichever column is being traced. `holeMask` keeps the above-horizon
+    // coverage of columns that turned out to have gaps in them, so the sky
+    // can be painted behind a canopy rather than under it.
+    this.covWords = (this.rows + 31) >> 5;
+    this.cov = new Uint32Array(this.covWords);
+    this.hasHoles = new Uint8Array(this.cols);
+    this.holeMask = new Uint32Array(this.cols * this.covWords);
   }
 
   clear() {
     this.glyph.fill(undefined);
     this.depth.fill(1e9);
     this.scrims.length = 0;
+    this.hasHoles.fill(0);
   }
 
   set(x, y, ch, colour) {

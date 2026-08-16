@@ -56,6 +56,26 @@ export function drawSky(screen, cam, L, site, jd, sun, sunAlt, dayK, when, marks
     }
   }
 
+  // Columns the raycaster left gaps in — a canopy above the horizon — get sky
+  // painted into each uncovered run rather than one rect up to a watermark.
+  // The gradient is in user space, so any sub-rect samples the same ramp.
+  if (screen.hasHoles) {
+    const limit = Math.max(0, Math.ceil(cam.hz));
+    const words = screen.covWords;
+    for (let x = 0; x < cols; x++) {
+      if (!screen.hasHoles[x]) continue;
+      const base = x * words;
+      let y = 0;
+      while (y < limit) {
+        if ((screen.holeMask[base + (y >> 5)] >>> (y & 31)) & 1) { y++; continue; }
+        const start = y;
+        while (y < limit &&
+               !((screen.holeMask[base + (y >> 5)] >>> (y & 31)) & 1)) y++;
+        ctx.fillRect(x * cw, start * ch, cw + 1, (y - start) * ch);
+      }
+    }
+  }
+
   if (marks) marks.reset();
 
   if (dayK < 0.62) {

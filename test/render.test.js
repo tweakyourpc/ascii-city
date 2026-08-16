@@ -47,6 +47,43 @@ class BlockWorld extends ChunkedWorld {
   }
 }
 
+/**
+ * Flat ground, one tree, and optionally an opaque slab behind or in front of
+ * it. Vegetation is the only transparent material, so this is what exercises
+ * the coverage bitmask.
+ */
+class TreeWorld extends ChunkedWorld {
+  constructor({ treeH = 7, tx = 25, ty = 40,
+                slabH = 0, slabY = 70, slabAhead = true } = {}) {
+    super({ size: 0 });
+    this.o = { treeH, tx, ty, slabH, slabY, slabAhead };
+    this.maxHeight = Math.max(treeH, slabH);
+    this.hasStreets = false;
+    this.hasVegetation = true;
+  }
+
+  fillChunk(ox, oy, base) {
+    const { treeH, tx, ty, slabH, slabY } = this.o;
+    for (let ly = 0; ly < 32; ly++) {
+      for (let lx = 0; lx < 32; lx++) {
+        const x = ox + lx;
+        const y = oy + ly;
+        const s = base + (ly << 5) + lx;
+        let h = 0;
+        let t = T.FIELD;
+        if (x === tx && y === ty) { h = treeH; t = T.TREE; }
+        else if (slabH && y >= slabY && y < slabY + 2) { h = slabH; t = T.TOWER; }
+        this.h[s] = h;
+        this.type[s] = t;
+        this.rnd[s] = 0.5;
+        this.lamp[s] = 0;
+        this.pal[s] = 0;
+        this.flags[s] = 0;
+      }
+    }
+  }
+}
+
 /** Minimal Screen stand-in: same buffers and contract, no canvas. */
 function makeScreen(cols, rows) {
   const cw = 8;
@@ -60,6 +97,10 @@ function makeScreen(cols, rows) {
     colour: new Array(cols * rows),
     depth: new Float32Array(cols * rows),
     skyEnd: new Int32Array(cols),
+    covWords: ((rows + 31) >> 5),
+    cov: new Uint32Array((rows + 31) >> 5),
+    hasHoles: new Uint8Array(cols),
+    holeMask: new Uint32Array(cols * ((rows + 31) >> 5)),
     set(x, y, g, c) {
       if (x < 0 || x >= cols || y < 0 || y >= rows) return;
       this.glyph[y * cols + x] = g;
@@ -219,4 +260,178 @@ test('the altitude early-out does not clip visible geometry', () => {
     if (honest.screen.glyph[i] !== uncut.screen.glyph[i]) diffs++;
   }
   assert.equal(diffs, 0, `${diffs} cells differ with the early-out enabled`);
+});
+
+
+/* ------------------------- transparent vegetation ------------------------- */
+
+/** Render looking north from just south of the tree. */
+function treeView(world, over = {}) {
+  return renderAt(world, {
+    z: 2.5, pitch: -2, cols: 90, rows: 30, x: 25.5, y: 22, ...over,
+  });
+}
+
+const LEAF = '@%&*+.';
+
+test('a canopy has holes in it', () => {
+  // A green brick has none. Between the first and last leaf row of a column
+  // crossing the tree there must be at least one row the canopy did not fill.
+  const world = new TreeWorld({ treeH: 8 });
+  const { screen } = treeView(world);
+  const { cols, rows, depth, glyph } = screen;
+
+  let holes = 0;
+  let leafCols = 0;
+  for (let col = 0; col < cols; col++) {
+    const leafRows = [];
+    for (let y = 0; y < rows; y++) {
+      const i = y * cols + col;
+      if (depth[i] < 50 && glyph[i] && LEAF.includes(glyph[i])) leafRows.push(y);
+    }
+    if (leafRows.length < 3) continue;
+    leafCols++;
+    const span = leafRows[leafRows.length - 1] - leafRows[0] + 1;
+    if (span > leafRows.length) holes++;
+  }
+  assert.ok(leafCols > 0, 'no canopy was drawn at all');
+  assert.ok(holes > 0, 'the canopy is solid: every column is a filled run');
+});
+
+test('a building behind a tree is visible through the gaps', () => {
+  // The headline feature. Without transparency the tree hides the slab
+  // entirely in the columns it covers.
+  const bare = new TreeWorld({ treeH: 8, slabH: 16, slabY: 70 });
+  const { screen } = treeView(bare);
+  const { cols, rows, depth, glyph } = screen;
+
+  // Columns where the tree drew something.
+  let through = 0;
+  let treeCols = 0;
+  for (let col = 0; col < cols; col++) {
+    let hasLeaf = false;
+    let hasFar = false;
+    for (let y = 0; y < rows; y++) {
+      const i = y * cols + col;
+      if (!glyph[i]) continue;
+      if (depth[i] < 40 && LEAF.includes(glyph[i])) hasLeaf = true;
+      if (depth[i] > 40 && depth[i] < 1e8) hasFar = true;
+    }
+    if (hasLeaf) { treeCols++; if (hasFar) through++; }
+  }
+  assert.ok(treeCols > 0, 'the tree drew nothing');
+  assert.ok(through > 0,
+    'no distant geometry showed through the canopy in any column');
+});
+
+test('an opaque building still occludes completely', () => {
+  // Guards the mark-iff-opaque rule: a slab in FRONT must hide the tree.
+  const world = new TreeWorld({ treeH: 8, tx: 25, ty: 80, slabH: 20, slabY: 40 });
+  const { screen } = treeView(world);
+  const { cols, rows, depth, glyph } = screen;
+
+  let behindSlab = 0;
+  for (let col = 0; col < cols; col++) {
+    for (let y = 0; y < rows; y++) {
+      const i = y * cols + col;
+      if (glyph[i] && depth[i] > 45 && depth[i] < 1e8) behindSlab++;
+    }
+  }
+  assert.equal(behindSlab, 0,
+    `${behindSlab} cells were drawn behind an opaque wall`);
+});
+
+test('the canopy is round, not square', () => {
+  // Leaf-row count per column must rise and fall across the crown. A box
+  // gives a flat profile.
+  const world = new TreeWorld({ treeH: 9 });
+  const { screen } = treeView(world, { cols: 200, rows: 44, z: 2.5, pitch: -3 });
+  const { cols, rows, depth, glyph } = screen;
+
+  const profile = [];
+  for (let col = 0; col < cols; col++) {
+    let n = 0;
+    for (let y = 0; y < rows; y++) {
+      const i = y * cols + col;
+      if (depth[i] < 50 && glyph[i] && LEAF.includes(glyph[i])) n++;
+    }
+    profile.push(n);
+  }
+  const first = profile.findIndex((v) => v > 0);
+  const last = profile.length - 1 - [...profile].reverse().findIndex((v) => v > 0);
+  assert.ok(first >= 0 && last > first,
+    'canopy is too narrow to have a profile; widen the fixture');
+
+  const peak = Math.max(...profile);
+  const edges = Math.max(profile[first], profile[last]);
+  assert.ok(peak > edges,
+    `profile ${profile.slice(first, last + 1)} does not bulge in the middle`);
+});
+
+test('vegetation does not shimmer with time', () => {
+  const world = new TreeWorld({ treeH: 8 });
+  const a = renderAt(world, { z: 2.5, pitch: -2, cols: 90, rows: 30, x: 25.5, y: 22 });
+  const screenB = makeScreen(90, 30);
+  const cam = new Camera();
+  cam.x = 25.5; cam.y = 22; cam.z = 2.5; cam.pitch = -2; cam.angle = Math.PI / 2;
+  cam.hz = screenB.horizon + 2;
+  cam.buildRays(screenB);
+  const light = new Lighting();
+  light.update(40);
+  renderScene(screenB, cam, world, light, 12345);   // a very different time
+
+  let diff = 0;
+  for (let i = 0; i < a.screen.glyph.length; i++) {
+    if (a.screen.glyph[i] !== screenB.glyph[i]) diff++;
+  }
+  assert.equal(diff, 0, `${diff} cells changed with time alone`);
+});
+
+test('the leaf pattern is anchored in the world, not to the screen', () => {
+  // Keyed on the ray instead of on the world, the gaps crawl like static as
+  // the camera moves. Nudging half a cell must not reshuffle the whole crown.
+  const world = new TreeWorld({ treeH: 8 });
+  const a = treeView(world, { x: 25.5 });
+  const b = treeView(world, { x: 25.5 + 0.02 });
+
+  const count = (s) => s.screen.glyph.filter(
+    (g, i) => g && LEAF.includes(g) && s.screen.depth[i] < 50).length;
+  const na = count(a);
+  const nb = count(b);
+  assert.ok(na > 0 && nb > 0);
+  assert.ok(Math.abs(na - nb) <= Math.max(3, na * 0.25),
+    `leaf count jumped from ${na} to ${nb} for a 0.02 cell move`);
+});
+
+test('the early-out is still exact when the column has holes in it', () => {
+  // The executable form of the termination proof. Disabling the cut by
+  // overstating the world height must change nothing.
+  const world = new TreeWorld({ treeH: 8, slabH: 16, slabY: 70 });
+  const honest = treeView(world);
+  world.maxHeight = 1e6;
+  const uncut = treeView(world);
+
+  let diff = 0;
+  for (let i = 0; i < honest.screen.glyph.length; i++) {
+    if (honest.screen.glyph[i] !== uncut.screen.glyph[i]) diff++;
+  }
+  assert.equal(diff, 0, `${diff} cells differ with the early-out enabled`);
+});
+
+test('a column with holes reports them so the sky can be filled behind', () => {
+  const world = new TreeWorld({ treeH: 14 });
+  const { screen } = treeView(world, { pitch: -6 });
+  let flagged = 0;
+  for (let col = 0; col < screen.cols; col++) if (screen.hasHoles[col]) flagged++;
+  assert.ok(flagged > 0,
+    'no column was flagged as having gaps; drawSky would paint over the canopy');
+});
+
+test('an all-opaque world never touches the coverage mask', () => {
+  // The fast path is what keeps buildings costing exactly what they did.
+  const world = new BlockWorld({ height: 10 });
+  const { screen } = renderAt(world, { z: 30, pitch: 14 });
+  let flagged = 0;
+  for (let col = 0; col < screen.cols; col++) if (screen.hasHoles[col]) flagged++;
+  assert.equal(flagged, 0, 'an opaque world promoted to the masked path');
 });
