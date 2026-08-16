@@ -44,27 +44,58 @@ export class Hud {
     this.onLoad({ preset: null, bbox, label: 'Custom area' });
   }
 
-  /** Reflect the current view in the URL so it can be shared or reloaded. */
-  syncHash({ preset, bbox }) {
-    const hash = preset ? `#city=${preset}`
-               : bbox ? `#bbox=${bbox.map((v) => v.toFixed(5)).join(',')}`
-               : '';
-    if (location.hash !== hash) history.replaceState(null, '', hash || location.pathname);
+  /**
+   * Reflect the current view in the URL, so any moment can be shared or
+   * reloaded exactly. Written with replaceState, so it adds no history
+   * entries, and throttled so it is not touched every frame.
+   */
+  syncHash({ preset, bbox }, cam = null, hour = null) {
+    const parts = [];
+    if (preset) parts.push(`city=${preset}`);
+    else if (bbox) parts.push(`bbox=${bbox.map((v) => v.toFixed(5)).join(',')}`);
+
+    if (cam) {
+      parts.push(`x=${cam.x.toFixed(1)}`, `y=${cam.y.toFixed(1)}`,
+                 `z=${cam.z.toFixed(1)}`, `a=${cam.angle.toFixed(3)}`,
+                 `p=${cam.pitch.toFixed(1)}`);
+    }
+    if (hour !== null) parts.push(`h=${hour.toFixed(2)}`);
+
+    const hash = parts.length ? '#' + parts.join('&') : '';
+    if (location.hash !== hash) {
+      history.replaceState(null, '', hash || location.pathname);
+    }
   }
 
-  /** Read the initial view from the URL, if there is one. */
+  /**
+   * Read the initial view from the URL.
+   * Accepts `city=` or `bbox=`, plus optional camera placement (x, y, z, a,
+   * p) and hour of day (h). Camera keys are how the screenshots in docs/ are
+   * reproduced.
+   */
   static initialView() {
-    const h = location.hash.slice(1);
-    const city = /^city=(\w+)$/.exec(h);
-    if (city && PRESETS[city[1]]) {
-      return { preset: city[1], bbox: PRESETS[city[1]].bbox, label: PRESETS[city[1]].label };
+    const q = new URLSearchParams(location.hash.slice(1));
+    const num = (k) => (q.has(k) ? Number(q.get(k)) : undefined);
+    const finite = (v) => (Number.isFinite(v) ? v : undefined);
+
+    const camera = {
+      x: finite(num('x')), y: finite(num('y')), z: finite(num('z')),
+      angle: finite(num('a')), pitch: finite(num('p')),
+    };
+    const hour = finite(num('h'));
+
+    const city = q.get('city');
+    if (city && PRESETS[city]) {
+      return { preset: city, bbox: PRESETS[city].bbox,
+               label: PRESETS[city].label, camera, hour };
     }
-    const bbox = /^bbox=(.+)$/.exec(h);
+    const bbox = q.get('bbox');
     if (bbox) {
-      const parsed = parseLocation(decodeURIComponent(bbox[1]));
-      if (parsed) return { preset: null, bbox: parsed, label: 'Custom area' };
+      const parsed = parseLocation(bbox);
+      if (parsed) return { preset: null, bbox: parsed, label: 'Custom area', camera, hour };
     }
-    return { preset: 'procedural', bbox: null, label: PRESETS.procedural.label };
+    return { preset: 'procedural', bbox: null,
+             label: PRESETS.procedural.label, camera, hour };
   }
 
   select(preset) {

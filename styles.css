@@ -10,12 +10,19 @@ html, body {
   position: absolute;
   top: 10px;
   left: 12px;
+  padding: 7px 11px 8px;
   font-size: 11px;
   line-height: 1.8;
   color: #7ee7ff;
   z-index: 10;
   pointer-events: none;
   text-shadow: 0 0 8px rgba(0, 120, 160, .9);
+  /* The scene behind can be a wall of lit windows, which the text-shadow
+     alone does not survive. */
+  background: rgba(2, 10, 14, .62);
+  border: 1px solid rgba(60, 140, 165, .22);
+  border-radius: 5px;
+  backdrop-filter: blur(2px);
 }
 
 #hud b { color: #ffd479; font-weight: 400; }

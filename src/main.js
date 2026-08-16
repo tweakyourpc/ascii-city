@@ -40,26 +40,44 @@ const hud = new Hud({ onLoad: (view) => loadView(view) });
 
 let simTime = Date.now();
 
+/** Set the simulated clock to a given local hour today, for a chosen light. */
+function setLocalHour(hour, lon) {
+  const now = new Date();
+  const utcNoon = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  simTime = utcNoon + (hour - lon / 15) * 3600000;
+}
+
 window.addEventListener('resize', () => screen.resize());
 
 /* ------------------------------ world load ------------------------------ */
 
-function adoptWorld(world, { lat, lon }) {
+function adoptWorld(world, { lat, lon }, camera = null) {
   state.world = world;
   state.site = { lat, lon };
   traffic.setWorld(world);
   cam.placeAt(world.spawn());
   cam.pitch = 0;
+
+  // An explicit camera from the URL wins, so a shared link reproduces the
+  // exact view. This is also how the screenshots in docs/ are regenerated.
+  if (camera) {
+    if (camera.x !== undefined) cam.x = camera.x;
+    if (camera.y !== undefined) cam.y = camera.y;
+    if (camera.z !== undefined) cam.z = camera.z;
+    if (camera.angle !== undefined) cam.angle = camera.angle;
+    if (camera.pitch !== undefined) cam.pitch = camera.pitch;
+  }
+
   settle(world, cam);
   hud.setAttribution(world);
 }
 
-function loadProcedural() {
+function loadProcedural(camera = null) {
   const world = new ProceduralWorld();
   world.bbox = null;
   world.label = 'Procedural City';
   world.stats = { buildings: 0, roads: 0 };
-  adoptWorld(world, { lat: DEFAULT_LAT, lon: DEFAULT_LON });
+  adoptWorld(world, { lat: DEFAULT_LAT, lon: DEFAULT_LON }, camera);
   state.phase = 'ready';
 }
 
@@ -70,7 +88,7 @@ async function loadView(view) {
   hud.syncHash(view);
 
   if (!view.bbox) {
-    loadProcedural();
+    loadProcedural(view.camera);
     return;
   }
 
@@ -93,7 +111,7 @@ async function loadView(view) {
     if (world.roadCells.length === 0) {
       throw new Error('No streets in this area. Try somewhere more built up.');
     }
-    adoptWorld(world, { lat: world.lat, lon: world.lon });
+    adoptWorld(world, { lat: world.lat, lon: world.lon }, view.camera);
     state.phase = 'ready';
   } catch (err) {
     if (token !== state.token) return;
@@ -188,6 +206,7 @@ function draw() {
 /* --------------------------------- loop --------------------------------- */
 
 let lastT = performance.now();
+let lastHashSync = 0;
 let fps = 60;
 let acc = 0;
 let frames = 0;
@@ -229,17 +248,37 @@ function frame() {
   const sunAlt = draw();
 
   hud.update({ warp, simTime, lon: state.site.lon, sunAlt, cam, screen, fps });
+
+  // Keep the URL in step with where you are, so any view can be shared.
+  if (now - lastHashSync > 1000) {
+    lastHashSync = now;
+    const local = new Date(simTime + state.site.lon / 15 * 3600000);
+    hud.syncHash(state.view, cam,
+      local.getUTCHours() + local.getUTCMinutes() / 60);
+  }
+
   requestAnimationFrame(frame);
 }
 
 /* --------------------------------- boot --------------------------------- */
 
-loadProcedural();                       // something to look at immediately
-requestAnimationFrame(frame);
+// `hud=0` hides the overlay, for clean screenshots and kiosk display.
+if (new URLSearchParams(location.hash.slice(1)).get('hud') === '0') {
+  const el = document.getElementById('hud');
+  if (el) el.style.display = 'none';
+}
 
 const initial = Hud.initialView();
+if (initial.hour !== undefined) {
+  setLocalHour(initial.hour, initial.bbox
+    ? (initial.bbox[1] + initial.bbox[3]) / 2
+    : DEFAULT_LON);
+}
+
+loadProcedural(initial.bbox ? null : initial.camera);   // something immediately
+requestAnimationFrame(frame);
+
 if (initial.bbox) loadView(initial);
-else hud.syncHash(initial);
 
 // Handy for poking at the engine from the console.
 Object.assign(window, { cam, screen, state, floorAt });

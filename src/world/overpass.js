@@ -167,6 +167,29 @@ function writeCache(bbox, data) {
   }
 }
 
+/**
+ * Keep only what the rasterizer reads.
+ *
+ * Overpass returns `nodes` (node id lists) and `bounds` alongside the inline
+ * `geometry` we actually use. Dropping them cuts a response by about a third,
+ * which matters because localStorage gives us roughly 5 MB and a dense square
+ * kilometre can arrive as 3 MB.
+ */
+function slim(elements) {
+  const out = [];
+  for (const el of elements) {
+    if (!el.tags) continue;
+    const o = { type: el.type, id: el.id, tags: el.tags };
+    if (el.geometry) o.geometry = el.geometry;
+    if (el.members) {
+      const rings = el.members.filter((m) => m.geometry && m.geometry.length > 2);
+      if (rings.length) o.members = rings.map((m) => ({ role: m.role, geometry: m.geometry }));
+    }
+    if (o.geometry || o.members) out.push(o);
+  }
+  return out;
+}
+
 const shuffled = (arr) => {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
@@ -268,7 +291,7 @@ export async function fetchOsm(bbox, { onProgress = () => {}, signal } = {}) {
     onProgress('Skipped water and parks');
   }
 
-  const elements = core.concat(extra);
+  const elements = slim(core.concat(extra));
   writeCache(bbox, elements);
   return elements;
 }

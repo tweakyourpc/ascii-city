@@ -89,6 +89,9 @@ const FOOT_LIKE = new Set(['footway', 'path', 'pedestrian', 'steps', 'cycleway']
 
 const WATERWAY_W = { river: 26, canal: 14, stream: 5 };
 
+/** Roughly 60 m: the height above which buildings carry warning lights. */
+const BEACON_MIN_H = 25;
+
 /* ------------------------------ the world ------------------------------- */
 
 export class OsmWorld {
@@ -254,11 +257,30 @@ export class OsmWorld {
     const pal = (el.id ?? 0) & 3;
     let touched = 0;
 
+    // Track the cell nearest the footprint's centre, so a tall building gets
+    // exactly one aircraft beacon rather than one per roof cell.
+    let cx = 0;
+    let cy = 0;
+    let n = 0;
+    for (const ring of rings) {
+      for (const [x, y] of ring) { cx += x; cy += y; n++; }
+    }
+    cx /= n || 1;
+    cy /= n || 1;
+    let beaconAt = null;
+    let beaconD = Infinity;
+
     scanFill(rings, this.width, this.height, (x, y) => {
       this._set(x, y, type, h, pal);
       touched++;
+      const d = (x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2;
+      if (d < beaconD) { beaconD = d; beaconAt = y * this.width + x; }
     });
-    if (touched) this.stats.buildings++;
+
+    if (touched) {
+      this.stats.buildings++;
+      if (h > BEACON_MIN_H && beaconAt !== null) this.flags[beaconAt] |= F.BEACON;
+    }
   }
 
   _fillArea(el) {

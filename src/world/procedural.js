@@ -103,7 +103,9 @@ export class ProceduralWorld extends ChunkedWorld {
         }
 
         let flags = stripe ? F.STRIPE : 0;
-        if (h > 25 && hash(ax, ay, seed ^ 0x9e37) < 0.25) flags |= F.BEACON;
+        // One beacon per block, at a fixed spot inside it. Testing per cell
+        // would scatter a red light over every cell of a tower's roof.
+        if (h > 25 && mx === 8 && my === 8) flags |= F.BEACON;
 
         const s = base + (ly << 5) + lx;
         this.h[s] = h;
