@@ -37,10 +37,36 @@ refuse to load modules over `file://`. The pre-refactor single-file version in
 | `E` / `Q` | Fly up / down |
 | `Shift` | Boost, on the ground and in the air |
 | Arrow keys | Move and turn |
+| `N` | Cycle labels: off / streets / streets and landmarks |
+| `T` | Cycle traffic: off / cars / cars and people |
+| Click | Identify a building, a street or a star |
+| `Esc` | Close the panel |
 | `[` `]` | Scrub back / forward one hour |
 | Time warp slider | Speed the clock up to 10000x |
 
 Fly above a building and you can land on its roof and walk around up there.
+
+## Knowing where you are
+
+Point it at a real city and it reads the OpenStreetMap tags that come with the
+map data: street names, building names, heights, addresses, construction dates.
+
+- The HUD always names the street you are on and the nearest crossing.
+- Named streets label themselves whenever they are in view, one label per
+  street, depth-tested so buildings occlude them.
+- Notable buildings, meaning named and either tall or carrying a Wikipedia
+  link, name themselves as you approach.
+- Click anything. A building gives its name, type, real height and floor
+  count, address, year built and distance, plus a Wikipedia summary for the
+  roughly one building in nine that has one. The ground gives the street. The
+  sky gives the star, planet or the Moon, with its phase.
+
+In one square kilometre of Midtown Manhattan that is 296 named buildings, 148
+with Wikipedia articles, 987 street addresses and 184 named main arteries,
+none of which costs an extra request: it was already in the map data and being
+thrown away.
+
+`N` turns the whole layer off when it gets in the way.
 
 ## Loading a city
 
@@ -94,6 +120,11 @@ in front, and DDA cells are contiguous so spans always overlap.
 level however high you are; only its distance changes. What sells altitude is
 rooftops becoming visible and the ground flattening into a map.
 
+**Transparency.** Foliage is see-through, which the original occlusion scheme
+could not express: a single bottom-anchored watermark per column is only
+correct for opaque spans. Coverage is now a per-column bitmask, with a fast
+path that keeps an all-opaque frame bit-identical and free.
+
 **Worlds.** The renderer never learns whether it is drawing a procedural city
 or Manhattan. Both implement one interface that returns an integer slot into
 chunked struct-of-arrays, so nothing allocates in a function called twelve
@@ -102,7 +133,7 @@ thousand times per frame.
 ## Tools
 
 ```bash
-npm test                                  # 56 tests, no network
+npm test                                  # 120 tests, no network
 node tools/render-frame.js --z 60 --pitch 15    # render a frame as text
 node tools/map-preview.js --city london         # top-down map of an import
 ```
@@ -122,6 +153,11 @@ Worth stating what has actually been verified rather than assumed:
 - The refactored procedural generator is pinned against the original engine's
   by a test over 42k cells: identical type, height, palette, lamp falloff and
   road markings.
+- The planets and Moon are checked against physics rather than a stored
+  ephemeris. Mercury's greatest elongation comes out at 27.8 degrees against a
+  true maximum of 28, Venus at 47.2 against 45 to 47, lunar perigee and apogee
+  at 356,686 and 406,254 km against 356,500 and 406,700, and the mean synodic
+  month at 29.5266 days against 29.53059.
 
 Buildings with no height data are rendered as 3 levels, per OpenStreetMap
 convention. Beyond the loaded extract the ground is drawn as neutral haze

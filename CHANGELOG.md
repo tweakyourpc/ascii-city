@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Street and landmark labels.** Named streets label themselves whenever in
+  view; notable buildings name themselves on approach. `N` cycles the layer
+  off / streets / streets and landmarks. The HUD always names the street you
+  are on and the nearest crossing.
+- **Click to identify.** Any building, street or sky object. Buildings show
+  name, type, real height and floors, address, year built, operator, hours,
+  distance and bearing, plus a Wikipedia summary where OpenStreetMap carries a
+  wikidata or wikipedia tag.
+- **The Moon and the five naked-eye planets**, with correct phase, distance
+  and varying magnitude, plus 36 named stars with Bayer designations and
+  constellations.
+- **See-through foliage.** Round canopies with gaps you can see buildings and
+  sky through.
+- **Points of interest.** Named amenities, shops, tourism nodes and subway
+  entrances, as a third best-effort Overpass layer.
+- Sprite detail levels for cars and pedestrians, plus head-on and rear car
+  templates chosen by heading. `T` cycles traffic off / cars / cars and
+  people, with pedestrians off by default.
+
+### Changed
+
+- Occlusion is a per-column bitmask rather than a single watermark, which the
+  transparency required. An all-opaque frame takes a fast path and is
+  bit-identical to before.
+- The DDA's termination test generalises both previous breaks: it asks whether
+  the row window all remaining geometry must project into is already painted.
+- Sprites write depth, so labels cannot draw over a car in front of them.
+
+### Fixed
+
+- `slim()` dropped every element without geometry or members, so POI nodes,
+  which carry lat/lon directly, would have been discarded silently.
+- Lunar phase is measured against the Sun's true longitude, not its mean. The
+  mean put the synodic month 29 minutes out per lunation.
+- A landmark label is depth-tested against its building's near face. At the
+  centroid distance a building always occluded its own name.
+- Labels are all-or-nothing. Skipping individually occluded characters left
+  city texture between the letters, so WEST 42ND STREET read as WEST
+  42N=+STREET.
+
 ## [1.0.0] - 2026-08-16
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "ascii-city",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A 3D city renderer that draws to text. Raycast ASCII engine with astronomically correct skies.",
   "type": "module",
   "license": "MIT",
