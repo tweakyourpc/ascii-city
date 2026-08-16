@@ -1,13 +1,101 @@
 import { METERS_PER_CELL } from './config.js';
+import { PRESETS, parseLocation } from './world/overpass.js';
 
-/** Read-only HUD readouts. City picker wiring lands with the OSM work. */
+/** HUD readouts, the city picker, and the URL hash that makes a view shareable. */
 export class Hud {
-  constructor() {
+  constructor({ onLoad }) {
     this.warp = document.getElementById('warp');
     this.warpv = document.getElementById('warpv');
     this.clock = document.getElementById('clock');
     this.phase = document.getElementById('phase');
     this.loc = document.getElementById('loc');
+    this.attrib = document.getElementById('attrib');
+    this.city = document.getElementById('city');
+    this.coords = document.getElementById('coords');
+    this.go = document.getElementById('go');
+    this.onLoad = onLoad;
+
+    for (const [key, preset] of Object.entries(PRESETS)) {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = preset.label;
+      this.city.appendChild(opt);
+    }
+
+    this.city.addEventListener('change', () => {
+      const key = this.city.value;
+      this.onLoad({ preset: key, bbox: PRESETS[key].bbox, label: PRESETS[key].label });
+    });
+
+    this.go.addEventListener('click', () => this._submitCoords());
+    this.coords.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this._submitCoords();
+      e.stopPropagation();
+    });
+  }
+
+  _submitCoords() {
+    const bbox = parseLocation(this.coords.value);
+    if (!bbox) {
+      this.setError('Could not read that. Try "40.75,-73.98" or "s,w,n,e".');
+      return;
+    }
+    this.city.value = '';
+    this.onLoad({ preset: null, bbox, label: 'Custom area' });
+  }
+
+  /** Reflect the current view in the URL so it can be shared or reloaded. */
+  syncHash({ preset, bbox }) {
+    const hash = preset ? `#city=${preset}`
+               : bbox ? `#bbox=${bbox.map((v) => v.toFixed(5)).join(',')}`
+               : '';
+    if (location.hash !== hash) history.replaceState(null, '', hash || location.pathname);
+  }
+
+  /** Read the initial view from the URL, if there is one. */
+  static initialView() {
+    const h = location.hash.slice(1);
+    const city = /^city=(\w+)$/.exec(h);
+    if (city && PRESETS[city[1]]) {
+      return { preset: city[1], bbox: PRESETS[city[1]].bbox, label: PRESETS[city[1]].label };
+    }
+    const bbox = /^bbox=(.+)$/.exec(h);
+    if (bbox) {
+      const parsed = parseLocation(decodeURIComponent(bbox[1]));
+      if (parsed) return { preset: null, bbox: parsed, label: 'Custom area' };
+    }
+    return { preset: 'procedural', bbox: null, label: PRESETS.procedural.label };
+  }
+
+  select(preset) {
+    if (preset) this.city.value = preset;
+  }
+
+  setBusy(busy) {
+    this.go.disabled = busy;
+    this.city.disabled = busy;
+  }
+
+  setError(msg) {
+    this.attrib.className = 'err';
+    this.attrib.textContent = msg;
+  }
+
+  /**
+   * OpenStreetMap's licence requires attribution wherever its data is shown.
+   */
+  setAttribution(world) {
+    this.attrib.className = 'dim';
+    if (!world.bbox) {
+      this.attrib.textContent = 'Procedural world. No map data.';
+      return;
+    }
+    const km = (world.width * METERS_PER_CELL / 1000).toFixed(2);
+    this.attrib.innerHTML =
+      `${world.label} &middot; ${world.stats.buildings} buildings, ` +
+      `${world.stats.roads} ways &middot; ${km} km across &middot; ` +
+      'map data &copy; <a href="https://www.openstreetmap.org/copyright" ' +
+      'target="_blank" rel="noopener">OpenStreetMap</a> contributors';
   }
 
   warpFactor() {
@@ -25,7 +113,7 @@ export class Hud {
 
     const altM = Math.round(cam.z * METERS_PER_CELL);
     this.loc.textContent =
-      `x ${cam.x.toFixed(0)}  y ${cam.y.toFixed(0)}  ·  alt ${altM}m` +
+      `x ${cam.x.toFixed(0)}  y ${cam.y.toFixed(0)}  ·  alt ${altM} m` +
       `  ·  ${screen.cols}x${screen.rows} cells  ·  ${fps.toFixed(0)} fps`;
   }
 }

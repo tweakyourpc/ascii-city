@@ -28,8 +28,42 @@ export class Traffic {
     this.agents.length = 0;
   }
 
+  /**
+   * OSM streets are not on a 14-cell block grid, so the lane maths below has
+   * nothing to align to. Put the agent on a known road cell near the camera
+   * instead, and let the off-road reversal in update() keep it on the street.
+   */
+  _spawnOsm(kind, cam) {
+    const world = this.world;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const p = world.randomRoadCell();
+      if (!p) return false;
+      const dx = p.x - cam.x;
+      const dy = p.y - cam.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < 256 || d2 > AGENT_CULL_D2 * 0.75) continue;
+
+      const t = world.type[world.sample(p.x, p.y)];
+      if (kind === 'car' ? t !== T.ROAD : t !== T.SIDEWALK) continue;
+
+      this.agents.push({
+        kind,
+        axis: Math.random() < 0.5 ? 'x' : 'y',
+        dir: Math.random() < 0.5 ? 1 : -1,
+        side: Math.random() < 0.5,
+        x: p.x, y: p.y, inX: false,
+        spd: kind === 'car' ? 3 + Math.random() * 5 : 0.9 + Math.random() * 0.7,
+        pal: (Math.random() * 4) | 0,
+      });
+      return true;
+    }
+    return false;
+  }
+
   _spawn(kind, cam) {
     const world = this.world;
+    if (world.randomRoadCell) return this._spawnOsm(kind, cam);
+
     const ang = Math.random() * Math.PI * 2;
     const rad = 16 + Math.random() * 58;
     const sx = cam.x + Math.cos(ang) * rad;
@@ -96,9 +130,15 @@ export class Traffic {
         a.inX = false;
       }
 
-      // Pedestrians hug the kerb; if they wander off it, turn them around.
-      if (a.kind === 'ped' && world.type[world.sample(a.x, a.y)] !== T.SIDEWALK) {
+      // Keep agents on their own surface. Pedestrians always did this; cars
+      // need it too on OSM streets, which have no lane grid to follow.
+      const surface = world.type[world.sample(a.x, a.y)];
+      const wanted = a.kind === 'car' ? T.ROAD : T.SIDEWALK;
+      if (surface !== wanted) {
         a.dir = -a.dir;
+        // Step back onto the road immediately, or it oscillates on the kerb.
+        if (a.axis === 'x') a.x += a.dir * a.spd * dt;
+        else a.y += a.dir * a.spd * dt;
       }
     }
 

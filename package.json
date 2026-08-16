@@ -1,6 +1,6 @@
 {
   "name": "ascii-city",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A 3D city renderer that draws to text. Raycast ASCII engine with astronomically correct skies.",
   "type": "module",
   "license": "MIT",
@@ -11,7 +11,7 @@
   },
   "scripts": {
     "start": "python3 -m http.server 8000",
-    "test": "node --test test/engine.test.js test/render.test.js test/parity.test.js"
+    "test": "node --test test/engine.test.js test/render.test.js test/parity.test.js test/osm.test.js test/boot.test.js"
   },
   "keywords": [
     "ascii",

@@ -9,9 +9,16 @@
  *   node tools/render-frame.js --z 60 --pitch -14        # drone view
  *   node tools/render-frame.js --hour 22                 # night
  *   node tools/render-frame.js --colour                  # 24-bit terminal colour
+ *   node tools/render-frame.js --city manhattan --z 90 --pitch 16
+ *
+ * --city fetches from Overpass and caches the response under .cache/.
  */
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { Camera } from '../src/camera.js';
 import { ProceduralWorld } from '../src/world/procedural.js';
+import { OsmWorld } from '../src/world/osm.js';
 import { Lighting } from '../src/render/materials.js';
 import { renderScene } from '../src/render/raycaster.js';
 import { julianDay, sunPos, altAz } from '../src/astro.js';
@@ -38,6 +45,7 @@ const PITCH = num('pitch', 0);
 const ANGLE = num('angle', Math.PI / 2);
 const HOUR = num('hour', 14);
 const USE_COLOUR = args.has('colour') || args.has('color');
+const CITY = args.get('city');
 
 /* ---------------------------- headless screen ----------------------------
  * The same buffers and the same setDepth/fillRow contract as src/screen.js,
@@ -84,7 +92,41 @@ screen.vscale = screen.proj * cw / ch;
 
 /* -------------------------------- render -------------------------------- */
 
-const world = new ProceduralWorld();
+/* ------------------------------- world -------------------------------- */
+
+/** Disk-backed stand-in for localStorage, so the Overpass cache works here. */
+function installCache(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  const file = (k) => path.join(dir, k.replace(/[^\w.-]/g, '_') + '.json');
+  globalThis.localStorage = {
+    getItem: (k) => (fs.existsSync(file(k)) ? fs.readFileSync(file(k), 'utf8') : null),
+    setItem: (k, v) => fs.writeFileSync(file(k), v),
+    removeItem: (k) => { try { fs.unlinkSync(file(k)); } catch { /* gone */ } },
+  };
+}
+
+let world;
+let site = { lat: DEFAULT_LAT, lon: DEFAULT_LON };
+
+if (CITY) {
+  installCache(new URL('../.cache/', import.meta.url).pathname);
+  const { fetchOsm, PRESETS, parseLocation } = await import('../src/world/overpass.js');
+  const preset = PRESETS[CITY];
+  const bbox = preset?.bbox ?? parseLocation(CITY);
+  if (!bbox) {
+    console.error(`Unknown city "${CITY}". Try: ${Object.keys(PRESETS).join(', ')}`);
+    process.exit(1);
+  }
+  const elements = await fetchOsm(bbox, { onProgress: (m) => console.error('  ' + m) });
+  world = new OsmWorld(bbox, elements, preset?.label ?? CITY);
+  site = { lat: world.lat, lon: world.lon };
+  console.error(`  ${world.name}: ${world.width}x${world.height} cells, ` +
+    `${world.stats.buildings} buildings, ${world.stats.roads} ways, ` +
+    `tallest ${(world.maxHeight * 2.37).toFixed(0)}m`);
+} else {
+  world = new ProceduralWorld();
+}
+
 const light = new Lighting();
 const cam = new Camera();
 
@@ -97,7 +139,6 @@ cam.pitch = PITCH;
 cam.hz = screen.horizon - cam.pitch;
 cam.buildRays(screen);
 
-const site = { lat: DEFAULT_LAT, lon: DEFAULT_LON };
 const when = new Date(Date.UTC(2026, 5, 21, HOUR - site.lon / 15, 0, 0));
 const jd = julianDay(when);
 const sun = sunPos(jd);

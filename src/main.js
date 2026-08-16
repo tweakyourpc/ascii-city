@@ -4,14 +4,17 @@ import { Input } from './input.js';
 import { Hud } from './hud.js';
 import { Traffic } from './agents.js';
 import { ProceduralWorld } from './world/procedural.js';
+import { OsmWorld } from './world/osm.js';
+import { fetchOsm } from './world/overpass.js';
 import { Lighting } from './render/materials.js';
 import { renderScene } from './render/raycaster.js';
 import { drawSky } from './render/sky.js';
+import { drawLoading, drawError } from './render/loading.js';
 import { canMoveTo, settle, floorAt } from './collision.js';
 import { julianDay, sunPos, altAz } from './astro.js';
 import {
-  WALK_SPEED, RUN_MULT, Z_ACCEL, Z_DAMP, EYE_HEIGHT,
-  DEFAULT_LAT, DEFAULT_LON, WORLD,
+  WALK_SPEED, RUN_MULT, Z_ACCEL, Z_DAMP,
+  DEFAULT_LAT, DEFAULT_LON,
 } from './config.js';
 import { wrap } from './world/source.js';
 
@@ -19,26 +22,97 @@ const canvas = document.getElementById('c');
 const screen = new Screen(canvas);
 const cam = new Camera();
 const input = new Input(canvas);
-const hud = new Hud();
 const light = new Lighting();
 
-const site = { lat: DEFAULT_LAT, lon: DEFAULT_LON };
-const world = new ProceduralWorld();
-const traffic = new Traffic(world);
+/** Everything that changes when a different city is loaded. */
+const state = {
+  world: null,
+  site: { lat: DEFAULT_LAT, lon: DEFAULT_LON },
+  view: { preset: 'procedural', bbox: null, label: 'Procedural City' },
+  phase: 'ready',            // 'ready' | 'loading' | 'error'
+  message: '',
+  error: null,
+  token: 0,                  // invalidates in-flight loads
+};
 
-cam.placeAt(world.spawn());
+const traffic = new Traffic(null);
+const hud = new Hud({ onLoad: (view) => loadView(view) });
 
 let simTime = Date.now();
 
 window.addEventListener('resize', () => screen.resize());
 
-/* ------------------------------ update ------------------------------ */
+/* ------------------------------ world load ------------------------------ */
+
+function adoptWorld(world, { lat, lon }) {
+  state.world = world;
+  state.site = { lat, lon };
+  traffic.setWorld(world);
+  cam.placeAt(world.spawn());
+  cam.pitch = 0;
+  settle(world, cam);
+  hud.setAttribution(world);
+}
+
+function loadProcedural() {
+  const world = new ProceduralWorld();
+  world.bbox = null;
+  world.label = 'Procedural City';
+  world.stats = { buildings: 0, roads: 0 };
+  adoptWorld(world, { lat: DEFAULT_LAT, lon: DEFAULT_LON });
+  state.phase = 'ready';
+}
+
+async function loadView(view) {
+  const token = ++state.token;
+  state.view = view;
+  hud.select(view.preset);
+  hud.syncHash(view);
+
+  if (!view.bbox) {
+    loadProcedural();
+    return;
+  }
+
+  state.phase = 'loading';
+  state.message = 'Loading map data';
+  hud.setBusy(true);
+
+  try {
+    const elements = await fetchOsm(view.bbox, {
+      onProgress: (msg) => { if (token === state.token) state.message = msg; },
+    });
+    if (token !== state.token) return;      // superseded by a newer request
+
+    state.message = 'Building the city';
+    // Yield once so the message paints before the rasterizer blocks.
+    await new Promise((r) => requestAnimationFrame(r));
+    if (token !== state.token) return;
+
+    const world = new OsmWorld(view.bbox, elements, view.label);
+    if (world.roadCells.length === 0) {
+      throw new Error('No streets in this area. Try somewhere more built up.');
+    }
+    adoptWorld(world, { lat: world.lat, lon: world.lon });
+    state.phase = 'ready';
+  } catch (err) {
+    if (token !== state.token) return;
+    state.phase = 'error';
+    state.error = err;
+    hud.setError(err.message);
+  } finally {
+    if (token === state.token) hud.setBusy(false);
+  }
+}
+
+/* -------------------------------- update -------------------------------- */
 
 function update(dt) {
+  const world = state.world;
   const look = input.takeLook();
   if (look.x || look.y) {
     cam.angle += look.x * 0.004;
-    // Pitch range is wide enough to look down at the city from altitude.
+    // Wide enough to look straight down at the city from altitude.
     cam.pitch = Math.max(-screen.rows * 0.9,
                  Math.min(screen.rows * 1.5, cam.pitch - look.y * 0.35));
   }
@@ -57,8 +131,7 @@ function update(dt) {
   if (input.down('arrowleft')) cam.angle -= 1.8 * dt;
   if (input.down('arrowright')) cam.angle += 1.8 * dt;
 
-  // Vertical: Q down, E up, with damping so it feels like a drone rather than
-  // a lift. Shift multiplies here too.
+  // Vertical: Q down, E up, damped so it flies rather than jumps.
   let thrust = 0;
   if (input.down('e')) thrust += 1;
   if (input.down('q')) thrust -= 1;
@@ -77,6 +150,10 @@ function update(dt) {
     if (world.size > 0) {
       cam.x = wrap(cam.x, world.size);
       cam.y = wrap(cam.y, world.size);
+    } else {
+      // Bounded extract: stay inside it.
+      cam.x = Math.max(0.5, Math.min(world.width - 0.5, cam.x));
+      cam.y = Math.max(0.5, Math.min(world.height - 0.5, cam.y));
     }
   }
 
@@ -84,32 +161,31 @@ function update(dt) {
   traffic.update(dt, cam);
 }
 
-/* ------------------------------- draw ------------------------------- */
+/* --------------------------------- draw --------------------------------- */
 
 function draw() {
   const sim = new Date(simTime);
   const jd = julianDay(sim);
   const sun = sunPos(jd);
-  const sp = altAz(sun.ra / 15, sun.dec, jd, site.lat, site.lon);
+  const sp = altAz(sun.ra / 15, sun.dec, jd, state.site.lat, state.site.lon);
   const sunAlt = sp.alt;
 
   const dayK = light.update(sunAlt);
 
   cam.hz = screen.horizon - cam.pitch;
   cam.buildRays(screen);
-
   screen.clear();
 
   const t = simTime / 1000;
-  renderScene(screen, cam, world, light, t);
-  drawSky(screen, cam, light, site, jd, sp, sunAlt, dayK);
+  renderScene(screen, cam, state.world, light, t);
+  drawSky(screen, cam, light, state.site, jd, sp, sunAlt, dayK);
   traffic.draw(screen, cam, light);
   screen.blit();
 
   return sunAlt;
 }
 
-/* ------------------------------- loop ------------------------------- */
+/* --------------------------------- loop --------------------------------- */
 
 let lastT = performance.now();
 let fps = 60;
@@ -125,6 +201,26 @@ function frame() {
   frames++;
   if (acc > 0.5) { fps = frames / acc; acc = 0; frames = 0; }
 
+  if (state.phase === 'loading') {
+    drawLoading(screen, {
+      title: 'LOADING MAP DATA',
+      detail: state.message,
+      t: now / 1000,
+    });
+    requestAnimationFrame(frame);
+    return;
+  }
+
+  if (state.phase === 'error') {
+    drawError(screen, {
+      title: 'COULD NOT LOAD THAT AREA',
+      detail: state.error?.message ?? 'Unknown error',
+      hint: 'Pick another city, or try again in a moment.',
+    });
+    requestAnimationFrame(frame);
+    return;
+  }
+
   const warp = hud.warpFactor();
   simTime += dt * 1000 * warp;
   simTime += input.takeHourShift() * 3600000;
@@ -132,11 +228,18 @@ function frame() {
   update(dt);
   const sunAlt = draw();
 
-  hud.update({ warp, simTime, lon: site.lon, sunAlt, cam, screen, fps });
+  hud.update({ warp, simTime, lon: state.site.lon, sunAlt, cam, screen, fps });
   requestAnimationFrame(frame);
 }
 
+/* --------------------------------- boot --------------------------------- */
+
+loadProcedural();                       // something to look at immediately
 requestAnimationFrame(frame);
 
+const initial = Hud.initialView();
+if (initial.bbox) loadView(initial);
+else hud.syncHash(initial);
+
 // Handy for poking at the engine from the console.
-Object.assign(window, { cam, world, screen, floorAt, EYE_HEIGHT, WORLD });
+Object.assign(window, { cam, screen, state, floorAt });

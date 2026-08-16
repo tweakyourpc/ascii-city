@@ -28,6 +28,40 @@ html, body {
   accent-color: #7ee7ff;
 }
 
+#hud .row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 3px;
+}
+
+#hud select,
+#hud input[type="text"],
+#hud button {
+  pointer-events: auto;
+  font: inherit;
+  font-size: 11px;
+  color: #7ee7ff;
+  background: rgba(0, 22, 30, .78);
+  border: 1px solid #1d5f70;
+  border-radius: 3px;
+  padding: 2px 5px;
+}
+
+#hud input[type="text"] { width: 250px; }
+#hud input[type="text"]::placeholder { color: #2f6d7d; }
+
+#hud select:focus,
+#hud input[type="text"]:focus,
+#hud button:focus { outline: 1px solid #7ee7ff; }
+
+#hud button { cursor: pointer; color: #ffd479; }
+#hud button:hover { background: rgba(0, 44, 58, .9); }
+#hud button:disabled { opacity: .45; cursor: default; }
+
+#hud .err { color: #ff9b7a; }
+#hud a { color: #3d8fa3; }
+
 canvas {
   display: block;
   background: #000;

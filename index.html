@@ -13,7 +13,14 @@
   <div>time warp <input id="warp" type="range" min="0" max="100" value="0" step="1">
        <span id="warpv">1x</span> &middot; <span id="clock">--:--</span>
        <span id="phase" class="dim"></span></div>
+  <div class="row">
+    <select id="city" title="Load a city from OpenStreetMap"></select>
+    <input id="coords" type="text" spellcheck="false"
+           placeholder="lat,lon or s,w,n,e or an openstreetmap.org link">
+    <button id="go">Load</button>
+  </div>
   <div id="loc" class="dim"></div>
+  <div id="attrib" class="dim"></div>
 </div>
 <canvas id="c"></canvas>
 <script type="module" src="src/main.js"></script>
