@@ -4,12 +4,95 @@ import { BLOCK, FOV, MAXD, MAX_CARS, MAX_PEDS, AGENT_CULL_D2 } from './config.js
 import { fogOf } from './render/materials.js';
 import { col2str } from './screen.js';
 
-const CAR = [
-  ' .------. ',
-  ' |##||##| ',
-  '-[o]--[o]-',
+/**
+ * Sprites at three detail levels, chosen by on-screen height.
+ *
+ * A single three-row template stretched over twelve screen rows repeats each
+ * row four times, which is where the blockiness came from. Nearest-neighbour
+ * sampling is fine; it just needs source art at roughly the right resolution.
+ */
+const CAR_LOD = [
+  [ // far: 3 rows
+    ' .------. ',
+    ' |##||##| ',
+    '-[o]--[o]-',
+  ],
+  [ // mid: 6 rows
+    '   .------.   ',
+    '  /  ||  \\  ',
+    ' /___||___\\ ',
+    '|##  ||  ##|',
+    '|___________|',
+    ' (o)-----(o) ',
+  ],
+  [ // near: 11 rows
+    '     .--------.     ',
+    '    /  ______  \\   ',
+    '   /  /      \\  \\ ',
+    '  /  /________\\  \\',
+    ' /__/          \\__\\',
+    '|## |          | ##|',
+    '|   |          |   |',
+    '|___|__________|___|',
+    '|__________________|',
+    ' \\(o)/      \\(o)/ ',
+    '  `--`        `--`  ',
+  ],
 ];
-const PED = [' o ', '/|\\', '/ \\'];
+
+/**
+ * Seen head-on or from behind a car is much narrower. Without this a car
+ * driving toward you looks like one driving across you.
+ */
+const CAR_END_LOD = [
+  [
+    ' .--. ',
+    ' |##| ',
+    '-o--o-',
+  ],
+  [
+    '  .--.  ',
+    ' /____\\ ',
+    '|# ## #|',
+    '|______|',
+    ' o    o ',
+    ' `----` ',
+  ],
+  [
+    '   .----.   ',
+    '  /______\\ ',
+    ' /  ____  \\',
+    '|  /    \\  |',
+    '| |      | |',
+    '|_|______|_|',
+    '|##      ##|',
+    '|__________|',
+    ' (o)    (o) ',
+    '  \\      /  ',
+    '  `------`  ',
+  ],
+];
+
+/** Pedestrians, with arms. Two phases so a walk cycle is possible. */
+const PED_LOD = [
+  [
+    [' o ', '/|\\', '/ \\'],
+    [' o ', '\\|/', '| |'],
+  ],
+  [
+    ['  o  ', ' /|\\ ', '  |  ', ' / \\ ', '/   \\'],
+    ['  o  ', ' \\|/ ', '  |  ', ' | | ', ' | | '],
+  ],
+  [
+    ['   o   ', '  ___  ', ' / | \\ ', '/  |  \\', '   |   ', '  / \\  ', ' /   \\ ', '/     \\'],
+    ['   o   ', '  ___  ', ' \\ | / ', '  \\|/  ', '   |   ', '  | |  ', '  | |  ', ' /   \\ '],
+  ],
+];
+
+/** Pick a detail level from how many rows the sprite covers. */
+function lodFor(rows) {
+  return rows >= 14 ? 2 : rows >= 6 ? 1 : 0;
+}
 
 /**
  * Cars and pedestrians routing the street grid.
@@ -17,10 +100,26 @@ const PED = [' o ', '/|\\', '/ \\'];
  * Only meaningful on a world that has a block-aligned road grid; worlds without
  * one report `hasStreets = false` and traffic is skipped.
  */
+export const TRAFFIC = { OFF: 0, CARS: 1, ALL: 2 };
+
 export class Traffic {
   constructor(world) {
     this.world = world;
     this.agents = [];
+    // Cars give a sense of scale that empty roads lack. Pedestrians at this
+    // resolution mostly read as noise, so they are opt-in.
+    this.mode = TRAFFIC.CARS;
+  }
+
+  cycle() {
+    this.mode = (this.mode + 1) % 3;
+    if (this.mode === TRAFFIC.OFF) this.agents.length = 0;
+    if (this.mode === TRAFFIC.CARS) {
+      for (let i = this.agents.length - 1; i >= 0; i--) {
+        if (this.agents[i].kind === 'ped') this.agents.splice(i, 1);
+      }
+    }
+    return this.mode;
   }
 
   setWorld(world) {
@@ -98,7 +197,10 @@ export class Traffic {
 
   update(dt, cam) {
     const world = this.world;
-    if (world.hasStreets === false) { this.agents.length = 0; return; }
+    if (this.mode === TRAFFIC.OFF || world.hasStreets === false) {
+      this.agents.length = 0;
+      return;
+    }
     const agents = this.agents;
 
     for (let i = agents.length - 1; i >= 0; i--) {
@@ -148,7 +250,9 @@ export class Traffic {
       if (agents[i].kind === 'car') cars++; else peds++;
     }
     for (let i = 0; i < 3; i++) if (cars < MAX_CARS && this._spawn('car', cam)) cars++;
-    for (let i = 0; i < 3; i++) if (peds < MAX_PEDS && this._spawn('ped', cam)) peds++;
+    if (this.mode === TRAFFIC.ALL) {
+      for (let i = 0; i < 3; i++) if (peds < MAX_PEDS && this._spawn('ped', cam)) peds++;
+    }
   }
 
   /**
@@ -180,17 +284,37 @@ export class Traffic {
       const dp = d * Math.cos(ang);
       if (dp < 0.3) continue;
 
-      const tpl = a.kind === 'car' ? CAR : PED;
-      const wWorld = a.kind === 'car' ? 2.4 : 0.85;
+      const wWorldSide = a.kind === 'car' ? 2.4 : 0.85;
       const hWorld = a.kind === 'car' ? 1.5 : 1.8;
 
-      const cx = cols / 2 + Math.tan(ang) * cam.proj;
-      const wcols = Math.max(1, wWorld * cam.proj / dp);
       const baseR = cam.rowOf(0, dp);
       const topR = cam.rowOf(hWorld, dp);
       const y0 = Math.floor(topR);
       const y1 = Math.max(y0 + 1, Math.ceil(baseR));
       const span = Math.max(0.001, baseR - topR);
+      const lod = lodFor(span);
+
+      // Which face of the car is toward us: its heading against the view ray.
+      let tpl;
+      let wWorld = wWorldSide;
+      if (a.kind === 'car') {
+        const hx = a.axis === 'x' ? a.dir : 0;
+        const hy = a.axis === 'y' ? a.dir : 0;
+        const vx = a.x - cam.x;
+        const vy = a.y - cam.y;
+        const vlen = Math.hypot(vx, vy) || 1;
+        const facing = Math.abs((hx * vx + hy * vy) / vlen);
+        const endOn = facing > 0.7;
+        tpl = endOn ? CAR_END_LOD[lod] : CAR_LOD[lod];
+        if (endOn) wWorld = 1.6;
+      } else {
+        // Two-frame walk cycle, phased by distance travelled.
+        const phase = ((a.axis === 'x' ? a.x : a.y) * 1.6 | 0) & 1;
+        tpl = PED_LOD[lod][phase];
+      }
+
+      const cx = cols / 2 + Math.tan(ang) * cam.proj;
+      const wcols = Math.max(1, wWorld * cam.proj / dp);
       const x0 = cx - wcols / 2;
       const f = Math.max(0.12, fogOf(dp));
 

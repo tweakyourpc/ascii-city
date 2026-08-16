@@ -2,7 +2,7 @@ import { Screen } from './screen.js';
 import { Camera } from './camera.js';
 import { Input } from './input.js';
 import { Hud } from './hud.js';
-import { Traffic } from './agents.js';
+import { Traffic, TRAFFIC } from './agents.js';
 import { ProceduralWorld } from './world/procedural.js';
 import { OsmWorld } from './world/osm.js';
 import { fetchOsm } from './world/overpass.js';
@@ -158,6 +158,7 @@ function update(dt) {
 
   for (let i = input.takeTaps('n'); i > 0; i--) labels.cycle();
   if (input.takeTaps('escape')) panel.close();
+  for (let i = input.takeTaps('t'); i > 0; i--) traffic.cycle();
 
   // Vertical: Q down, E up, damped so it flies rather than jumps.
   let thrust = 0;
@@ -268,6 +269,7 @@ function frame() {
       ? state.world.nearestStreet(cam.x, cam.y)
       : null,
     labelMode: labels.mode,
+    trafficMode: traffic.mode,
   });
 
   // Keep the URL in step with where you are, so any view can be shared.
@@ -335,4 +337,6 @@ requestAnimationFrame(frame);
 if (initial.bbox) loadView(initial);
 
 // Handy for poking at the engine from the console.
-Object.assign(window, { cam, screen, state, floorAt, labels, panel, MODE, pick });
+Object.assign(window, {
+  cam, screen, state, floorAt, labels, panel, traffic, MODE, TRAFFIC, pick,
+});
