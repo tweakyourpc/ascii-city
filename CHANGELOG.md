@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Type a city name.** The location box accepts "Kyoto" as well as
+  coordinates and map links, resolved through Nominatim with Photon as a
+  fallback. The resolved name is displayed, because "Springfield" is
+  ambiguous. Coordinates still resolve synchronously with no network call.
+- [docs/FLIGHT-TRACKING.md](docs/FLIGHT-TRACKING.md): a written-up proposal for
+  plotting live aircraft, with the CORS obstacle measured across six sources
+  and a provider interface sketched so a feed can be added later.
 
 - **Street and landmark labels.** Named streets label themselves whenever in
   view; notable buildings name themselves on approach. `N` cycles the layer
@@ -39,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The view was horizontally mirrored**, and had been since the original
+  single-file engine. The ray fan ran backwards, so facing north the left of
+  the screen looked east-of-north. Looking along an east-west street this put
+  the buildings from one side of the road on the other. It went unnoticed
+  because a procedural city is statistically symmetric, so a mirror of it
+  looks like itself; real map data made it visible. Six places that map a
+  horizontal angle to a screen column had to move together, including the
+  drag-look and strafe directions, which were compensating for it.
 - `slim()` dropped every element without geometry or members, so POI nodes,
   which carry lat/lon directly, would have been discarded silently.
 - Lunar phase is measured against the Sun's true longitude, not its mean. The

@@ -70,11 +70,18 @@ thrown away.
 
 ## Loading a city
 
-Pick a preset from the dropdown, or paste into the box:
+Pick a preset from the dropdown, or type into the box:
 
+- `Kyoto`: a place name, resolved through OpenStreetMap's geocoder
 - `40.7580,-73.9855`: a point, and a box is built around it
 - `40.74,-74.00,40.76,-73.98`: an explicit `south,west,north,east` box
 - `https://www.openstreetmap.org/#map=16/51.5074/-0.1278`: a map link
+
+A place name resolves to the middle of that place. A geocoder's own bounding
+box for a city is the whole city, some thousands of times more than this will
+load, so only the centre is used. The name it actually matched is shown, since
+"Springfield" is ambiguous and quietly loading the wrong one would be worse
+than saying so.
 
 The URL hash tracks where you are, so any view is a shareable link:
 
@@ -162,6 +169,15 @@ Worth stating what has actually been verified rather than assumed:
 Buildings with no height data are rendered as 3 levels, per OpenStreetMap
 convention. Beyond the loaded extract the ground is drawn as neutral haze
 rather than invented countryside.
+
+## Ideas worth doing
+
+- **[Live flight tracking](docs/FLIGHT-TRACKING.md)**: plot real aircraft
+  taking off and landing. The data is excellent and the engine already has the
+  pieces, but no free flight API allows a browser to call it directly, so it
+  needs a proxy of some kind. The document measures the options and sketches a
+  provider interface so a data source can be plugged in as an add-on. Help
+  welcome.
 
 ## Licence
 

@@ -77,12 +77,12 @@ nothing about CORS:
 
 | Source | HTTP | Aircraft | `Access-Control-Allow-Origin` |
 | --- | --- | --- | --- |
-| OpenSky Network | 200 | 80 | `https://opensky-network.org`, its own origin, so blocked |
+| OpenSky Network | 200 | 80 | `https://opensky-network.org` (its own origin, so blocked) |
 | adsb.lol | 200 | 225 | none |
 | adsb.fi | 200 | 216 | none |
-| adsb.one | 403 |, | none |
-| airplanes.live | 403 |, | none |
-| allorigins (public CORS proxy) | 500 |, | none |
+| adsb.one | 403 | n/a | none |
+| airplanes.live | 403 | n/a | none |
+| allorigins (public CORS proxy) | 500 | n/a | none |
 
 Reproduce with:
 
