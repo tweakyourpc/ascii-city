@@ -215,11 +215,26 @@ test('the procedural world attributes itself honestly', () => {
   assert.match(dom.el('attrib').textContent, /Procedural/);
 });
 
-test('unparseable coordinates give a readable error, not a crash', () => {
-  dom.el('coords').value = 'somewhere nice';
+test('malformed numbers give an immediate, readable error', () => {
+  // Still synchronous: something that is clearly meant to be coordinates but
+  // is not must not cost a network round trip.
+  dom.el('coords').value = '12, 34, 56';
   dom.el('go').fire('click');
   assert.equal(dom.el('attrib').className, 'err');
-  assert.match(dom.el('attrib').textContent, /Could not read that/);
+  assert.match(dom.el('attrib').textContent, /Could not read those numbers/);
+});
+
+test('a place name that cannot be found says so', async () => {
+  // The stubbed fetch returns OSM elements, not a geocoder response, so the
+  // lookup fails the way an unknown place would.
+  dom.el('coords').value = 'zzzz not a real place zzzz';
+  dom.el('go').fire('click');
+  for (let i = 0; i < 12; i++) {
+    await new Promise((r) => setImmediate(r));
+    dom.pump(3);
+  }
+  assert.equal(dom.el('attrib').className, 'err');
+  assert.match(dom.el('attrib').textContent, /Could not find/);
 });
 
 test('valid coordinates load a city and become a shareable URL hash', async () => {

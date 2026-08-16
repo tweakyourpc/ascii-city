@@ -136,7 +136,15 @@ export function parseLocation(text, { spanDeg = 0.011 } = {}) {
   return null;
 }
 
-function boxAround(lat, lon, spanDeg) {
+/** Default span of a box built around a point, in degrees of latitude. */
+export const DEFAULT_SPAN_DEG = 0.011;
+
+/**
+ * A loadable box centred on a point. Exported because the geocoder needs the
+ * same span logic: a place name resolves to a point, and everything downstream
+ * expects a box the size the engine can actually render.
+ */
+export function boxAround(lat, lon, spanDeg = DEFAULT_SPAN_DEG) {
   // Keep the box roughly square on the ground, not in degrees.
   const half = spanDeg / 2;
   const lonHalf = half / Math.max(0.2, Math.cos(lat * Math.PI / 180));

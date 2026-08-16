@@ -55,7 +55,7 @@ html, body {
   padding: 2px 5px;
 }
 
-#hud input[type="text"] { width: 250px; }
+#hud input[type="text"] { width: 280px; }
 #hud input[type="text"]::placeholder { color: #2f6d7d; }
 
 #hud select:focus,
@@ -71,6 +71,9 @@ html, body {
   letter-spacing: .06em;
   min-height: 1.8em;
 }
+
+/* The name a place name actually resolved to, so a wrong match is visible. */
+#hud .found { color: #ffd479; }
 
 #hud .err { color: #ff9b7a; }
 #hud a { color: #3d8fa3; }

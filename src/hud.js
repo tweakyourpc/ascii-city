@@ -1,5 +1,9 @@
 import { METERS_PER_CELL } from './config.js';
 import { PRESETS, parseLocation } from './world/overpass.js';
+import { lookup } from './geocode.js';
+
+const escapeHtml = (s) => String(s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /** HUD readouts, the city picker, and the URL hash that makes a view shareable. */
 export class Hud {
@@ -24,11 +28,14 @@ export class Hud {
     }
 
     this.city.addEventListener('change', () => {
+      this.resolved = null;
       const key = this.city.value;
       this.onLoad({ preset: key, bbox: PRESETS[key].bbox, label: PRESETS[key].label });
     });
 
     this.go.addEventListener('click', () => this._submitCoords());
+    // A new query invalidates whatever is in flight.
+    this.coords.addEventListener('input', () => { this.resolved = null; });
     this.coords.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this._submitCoords();
       e.stopPropagation();
@@ -36,13 +43,41 @@ export class Hud {
   }
 
   _submitCoords() {
-    const bbox = parseLocation(this.coords.value);
-    if (!bbox) {
-      this.setError('Could not read that. Try "40.75,-73.98" or "s,w,n,e".');
+    const text = this.coords.value.trim();
+    if (!text) return;
+
+    // Coordinates and map links resolve without a network round trip, and this
+    // path stays synchronous on purpose: it is what lets a shared link's hash
+    // be written before anything awaits.
+    const bbox = parseLocation(text);
+    if (bbox) {
+      this.city.value = '';
+      this.onLoad({ preset: null, bbox, label: 'Custom area' });
       return;
     }
-    this.city.value = '';
-    this.onLoad({ preset: null, bbox, label: 'Custom area' });
+
+    // Anything else is treated as a place name.
+    if (/^[\s\d.,+-]+$/.test(text)) {
+      this.setError('Could not read those numbers. Try "40.75,-73.98" or "s,w,n,e".');
+      return;
+    }
+
+    this._lookupToken = (this._lookupToken || 0) + 1;
+    const token = this._lookupToken;
+    this.setBusy(true);
+    this.setStatus(`Looking up ${text}\u2026`);
+
+    lookup(text, (r) => {
+      if (token !== this._lookupToken) return;   // superseded by a newer query
+      this.setBusy(false);
+      if (!r) {
+        this.setError(`Could not find "${text}". Try a larger place, or coordinates.`);
+        return;
+      }
+      this.city.value = '';
+      this.resolved = r.display;
+      this.onLoad({ preset: null, bbox: r.bbox, label: r.label, display: r.display });
+    });
   }
 
   /**
@@ -113,6 +148,12 @@ export class Hud {
     this.attrib.textContent = msg;
   }
 
+  /** A neutral progress line, in the same place as errors and attribution. */
+  setStatus(msg) {
+    this.attrib.className = 'dim';
+    this.attrib.textContent = msg;
+  }
+
   /**
    * OpenStreetMap's licence requires attribution wherever its data is shown.
    */
@@ -123,7 +164,10 @@ export class Hud {
       return;
     }
     const km = (world.width * METERS_PER_CELL / 1000).toFixed(2);
-    this.attrib.innerHTML =
+    const found = this.resolved && this.resolved !== world.label
+      ? `<span class="found">${escapeHtml(this.resolved)}</span> &middot; `
+      : '';
+    this.attrib.innerHTML = found +
       `${world.label} &middot; ${world.stats.buildings} buildings, ` +
       `${world.stats.roads} ways &middot; ${km} km across &middot; ` +
       'map data &copy; <a href="https://www.openstreetmap.org/copyright" ' +
