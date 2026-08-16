@@ -11,7 +11,7 @@
   },
   "scripts": {
     "start": "python3 -m http.server 8000",
-    "test": "node --test test/engine.test.js test/render.test.js test/parity.test.js test/osm.test.js test/labels.test.js test/pick.test.js test/boot.test.js"
+    "test": "node --test test/engine.test.js test/render.test.js test/parity.test.js test/osm.test.js test/labels.test.js test/pick.test.js test/sky.test.js test/boot.test.js"
   },
   "keywords": [
     "ascii",

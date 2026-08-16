@@ -1,6 +1,7 @@
 import { col2str } from '../screen.js';
 import { normAngle } from '../camera.js';
-import { altAz, STARS } from '../astro.js';
+import { altAz, STARS, NAMED_STARS } from '../astro.js';
+import { planets, moon, moonGlyph, daysSinceEpoch } from '../planets.js';
 import { FOV } from '../config.js';
 
 /**
@@ -22,7 +23,19 @@ export function project(screen, cam, azDeg, altDeg) {
  * Paint the sky gradient onto the canvas directly, up to each column's sky
  * limit, then overlay stars and the sun as glyphs.
  */
-export function drawSky(screen, cam, L, site, jd, sun, sunAlt, dayK) {
+/**
+ * Draw one sky object as a glyph, recording it for picking.
+ * Returns true if it was actually on screen and unobstructed.
+ */
+function place(screen, cam, marks, o, alt, az, glyph, colour) {
+  const p = project(screen, cam, az, alt);
+  if (!p || p.y >= screen.skyEnd[p.x]) return false;
+  screen.set(p.x, p.y, glyph, colour);
+  if (marks) marks.add(p.x, p.y, { ...o, alt, az });
+  return true;
+}
+
+export function drawSky(screen, cam, L, site, jd, sun, sunAlt, dayK, when, marks) {
   const { ctx, cols, cw, ch, skyEnd } = screen;
 
   ctx.fillStyle = '#000';
@@ -43,6 +56,8 @@ export function drawSky(screen, cam, L, site, jd, sun, sunAlt, dayK) {
     }
   }
 
+  if (marks) marks.reset();
+
   if (dayK < 0.62) {
     const starDim = 1 - dayK / 0.62;
     for (let i = 0; i < STARS.length; i++) {
@@ -56,11 +71,64 @@ export function drawSky(screen, cam, L, site, jd, sun, sunAlt, dayK) {
       if (bright < 0.06) continue;
       screen.set(p.x, p.y, m < 0.6 ? '*' : m < 2 ? '+' : '.',
                  col2str(250 * bright, 220 * bright, 255 * bright));
+
+      // Only the catalogued stars are nameable. The procedural filler is
+      // anonymous by construction and must not claim to be anything.
+      if (marks && i < NAMED_STARS.length) {
+        const info = NAMED_STARS[i];
+        marks.add(p.x, p.y, {
+          kind: 'star', name: info.name,
+          detail: `${info.bayer} · ${info.con}`,
+          mag: m, alt: q.alt, az: q.az,
+        });
+      }
+    }
+  }
+
+  /* ---- Moon and planets ---- */
+  if (when) {
+    const d = daysSinceEpoch(when);
+
+    // Planets are visible at twilight before the faint stars are.
+    if (dayK < 0.80) {
+      const dim = Math.max(0, Math.min(1, (0.80 - dayK) / 0.5));
+      for (const pl of planets(d)) {
+        const q = altAz(pl.ra, pl.dec, jd, site.lat, site.lon);
+        if (q.alt <= 1) continue;
+        const b = Math.max(0.25, Math.min(1, (2.2 - pl.mag) / 4)) * dim;
+        const glyph = pl.mag < -2 ? '@' : pl.mag < 0.5 ? '*' : '+';
+        place(screen, cam, marks, {
+          kind: 'planet', name: pl.name,
+          detail: `${pl.dist.toFixed(2)} AU · elongation ${pl.elongation.toFixed(0)}°`,
+          mag: pl.mag,
+        }, q.alt, q.az, glyph,
+        col2str(pl.colour[0] * b, pl.colour[1] * b, pl.colour[2] * b));
+      }
+    }
+
+    const mo = moon(d);
+    const mq = altAz(mo.ra, mo.dec, jd, site.lat, site.lon);
+    if (mq.alt > 0.5) {
+      // The Moon is visible in daylight too, just washed out.
+      const b = Math.max(0.35, 1 - dayK * 0.45) * (0.35 + 0.65 * mo.illuminated);
+      place(screen, cam, marks, {
+        kind: 'moon', name: 'The Moon',
+        detail: `${mo.phaseName} · ${Math.round(mo.illuminated * 100)}% lit · `
+              + `${Math.round(mo.distKm).toLocaleString('en-US')} km`,
+        mag: mo.mag,
+      }, mq.alt, mq.az, moonGlyph(mo.illuminated),
+      col2str(mo.colour[0] * b, mo.colour[1] * b, mo.colour[2] * b));
     }
   }
 
   if (sunAlt > -2) {
     const p = project(screen, cam, sun.az, sunAlt);
+    if (p && marks) {
+      marks.add(p.x, p.y, {
+        kind: 'sun', name: 'The Sun',
+        detail: `altitude ${sunAlt.toFixed(1)}°`, mag: -26.7,
+      });
+    }
     if (p) {
       const warm = sunAlt < 8;
       const sc = warm ? col2str(255, 168, 90) : col2str(255, 244, 200);

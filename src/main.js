@@ -206,7 +206,7 @@ function draw() {
 
   const t = simTime / 1000;
   renderScene(screen, cam, state.world, light, t);
-  drawSky(screen, cam, light, state.site, jd, sp, sunAlt, dayK);
+  drawSky(screen, cam, light, state.site, jd, sp, sunAlt, dayK, sim, skyMarks);
   traffic.draw(screen, cam, light);
   labels.draw(screen, cam, state.world, light);
   panel.draw(screen, cam, state.world);
