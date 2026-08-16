@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>ASCII City</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden;
+  font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+#hud{position:absolute;top:10px;left:12px;font-size:11px;line-height:1.8;
+  color:#7ee7ff;z-index:10;pointer-events:none;text-shadow:0 0 8px rgba(0,120,160,.9)}
+#hud b{color:#ffd479;font-weight:400}
+#hud input{pointer-events:auto;vertical-align:middle;width:110px;accent-color:#7ee7ff}
+#hud .dim{color:#3d8fa3}
+canvas{display:block;background:#000;cursor:crosshair}
+</style>
+</head>
+<body>
+<div id="hud">
+  <div><b>WASD</b> move &middot; <b>drag</b> look &middot; <b>shift</b> run &middot; <b>[ ]</b> shift an hour</div>
+  <div>time warp <input id="warp" type="range" min="0" max="100" value="0" step="1">
+       <span id="warpv">1x</span> &middot; <span id="clock">--:--</span> <span id="phase" class="dim"></span></div>
+  <div id="loc" class="dim"></div>
+</div>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+
+/* ============================== setup ============================== */
+
+var canvas = document.getElementById('c');
+var ctx = canvas.getContext('2d', { alpha: false });
+var warpEl = document.getElementById('warp');
+
+var FONT = 14;                 // px
+var FC = 8, FCH = 15;          // measured cell width, cell height
+var W, H, OCOLS, OROWS, HORIZON;
+var FOV = 1.15;                // radians
+var PROJ, VSCALE;              // projection scale, columns / rows
+
+var WORLD = 2048, BLOCK = 14, SEED = 1337;
+var MAXD = 175;                // draw distance in cells
+var EYE = 1.65;                // camera height in cells
+
+var px = 1024.5, py = 976.5, pa = Math.PI / 2, pitch = 0;
+var LAT = 40.71, LON = -74.00;
+
+var gch, gcol, skyEnd, wallDist;
+
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W; canvas.height = H;
+  ctx.textBaseline = 'top';
+  ctx.font = FONT + 'px ui-monospace, Menlo, Consolas, monospace';
+  FC = ctx.measureText('MMMMMMMMMM').width / 10 || 8;
+  FCH = Math.round(FONT * 1.05);
+  OCOLS = Math.max(24, Math.floor(W / FC));
+  OROWS = Math.max(12, Math.floor(H / FCH));
+  HORIZON = Math.floor(OROWS * 0.52);
+  PROJ = (OCOLS / 2) / Math.tan(FOV / 2);
+  VSCALE = PROJ * FC / FCH;          // vertical units are rows, not columns
+  gch = new Array(OCOLS * OROWS);
+  gcol = new Array(OCOLS * OROWS);
+  skyEnd = new Int32Array(OCOLS);
+  wallDist = new Float32Array(OCOLS);
+}
+resize();
+window.addEventListener('resize', resize);
+
+var RC = [], RS = [], RINV = [];
+function buildRays() {
+  for (var i = 0; i < OCOLS; i++) {
+    var ang = pa - FOV / 2 + (i + 0.5) / OCOLS * FOV;
+    RC[i] = Math.cos(ang); RS[i] = Math.sin(ang);
+    RINV[i] = 1 / Math.cos(ang - pa);
+  }
+}
+
+function setCell(x, y, ch, color) {
+  if (x < 0 || x >= OCOLS || y < 0 || y >= OROWS) return;
+  var i = y * OCOLS + x;
+  gch[i] = ch; gcol[i] = color;
+}
+
+/* --------------------------- colour cache -------------------------- */
+
+var colCache = {};
+function col2str(r, g, b) {
+  r = r < 0 ? 0 : r > 255 ? 255 : r | 0;
+  g = g < 0 ? 0 : g > 255 ? 255 : g | 0;
+  b = b < 0 ? 0 : b > 255 ? 255 : b | 0;
+  var key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+  var s = colCache[key];
+  if (s) return s;
+  s = 'rgb(' + ((r >> 3) << 3) + ',' + ((g >> 3) << 3) + ',' + ((b >> 3) << 3) + ')';
+  colCache[key] = s;
+  return s;
+}
+
+/* ============================ world gen ============================ */
+
+function hash(x, y) {
+  var h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ SEED;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+function wrap(v, m) { return ((v % m) + m) % m; }
+
+var cache = new Map();
+function cellInfo(cx, cy) {
+  var ax = wrap(Math.floor(cx), WORLD), ay = wrap(Math.floor(cy), WORLD);
+  var key = ay * WORLD + ax;
+  var v = cache.get(key);
+  if (v !== undefined) return v;
+
+  var mx = ax % BLOCK, my = ay % BLOCK;
+  var bx = (ax / BLOCK) | 0, by = (ay / BLOCK) | 0;
+  var ddx = ax - 1024, ddy = ay - 1024;
+  var dist = Math.sqrt(ddx * ddx + ddy * ddy);
+  var rb = hash(bx, by), rb2 = hash(bx + 911, by + 733), rc = hash(ax, ay);
+
+  var type, h = 0, stripe = false, pal = (hash(bx + 5, by + 9) * 4) | 0;
+  var pdx = ax - 1036, pdy = ay - 1031;
+  var pondD = Math.sqrt(pdx * pdx + pdy * pdy);
+
+  if (dist < 54) {
+    // the park: an open foreground so the skyline has somewhere to stand
+    if (pondD < 9.5) type = 'water';
+    else if (Math.abs(ax - 1024) < 1.5 || Math.abs(ay - 1024) < 1.5 ||
+             (dist > 28.5 && dist < 30.5)) type = 'plaza';
+    else if (rc < 0.018 && Math.abs(ax - 1024) > 7 && Math.abs(ay - 1024) > 7)
+         { type = 'tree'; h = 3.4 + rc * 90; }
+    else type = 'field';
+  } else if (mx < 3 || my < 3) {
+    type = dist < 780 ? 'road' : 'path';
+    if (mx === 1 && my >= 3 && (ay % 4) < 2) stripe = true;
+    if (my === 1 && mx >= 3 && (ax % 4) < 2) stripe = true;
+  } else if (mx === 3 || mx === 13 || my === 3 || my === 13) {
+    type = 'sidewalk';
+    if (dist < 560 && rc < 0.05) { type = 'tree'; h = 3.2 + rc * 20; }
+  } else if (dist < 265) {
+    if (rb < 0.07) type = 'plaza';
+    else {
+      type = 'tower';
+      var lf = Math.max(0, 1 - dist / 320);
+      // a skyline needs low-rise as well, or every street is a slot canyon
+      h = rb < 0.46 ? 4 + rb2 * 6 : 10 + rb2 * 10 + lf * rc * 21;
+    }
+  } else if (dist < 480) {
+    if (rb < 0.74) { type = 'house'; h = 2.4 + rb2 * 2.2; }
+    else type = 'yard';
+  } else if (dist < 790) {
+    if (rb < 0.35) type = 'field';
+    else { type = 'farm'; h = rc < 0.5 ? 1.1 : 0; }
+  } else {
+    if (rb < 0.55) {
+      if (rc < 0.55) { type = 'forest'; h = 3 + rc * 5; } else type = 'field';
+    } else type = 'water';
+  }
+
+  var lamp = 0;
+  if (type === 'road' || type === 'sidewalk' || type === 'plaza' || type === 'path') {
+    var kx = Math.min(Math.abs(ax - (bx * BLOCK - 1)), Math.abs(ax - (bx * BLOCK + 3)),
+                      Math.abs(ax - (bx * BLOCK + 13)), Math.abs(ax - (bx * BLOCK + BLOCK + 3)));
+    var ky = Math.min(Math.abs(ay - (by * BLOCK - 1)), Math.abs(ay - (by * BLOCK + 3)),
+                      Math.abs(ay - (by * BLOCK + 13)), Math.abs(ay - (by * BLOCK + BLOCK + 3)));
+    var sx2 = Math.abs(ax - Math.round(ax / 7) * 7), sy2 = Math.abs(ay - Math.round(ay / 7) * 7);
+    var dA = kx * kx + sy2 * sy2, dB = ky * ky + sx2 * sx2;
+    lamp = Math.exp(-Math.min(dA, dB) / 7.5);
+  }
+
+  v = { t: type, h: h, r: rc, stripe: stripe, pal: pal, lamp: lamp };
+  cache.set(key, v);
+  if (cache.size > 400000) cache.clear();
+  return v;
+}
+
+function walkable(x, y) {
+  var i = cellInfo(x, y);
+  return i.h === 0 && i.t !== 'water';
+}
+function freeAt(x, y) {
+  var R = 0.28;
+  return walkable(x - R, y - R) && walkable(x + R, y - R) && walkable(x - R, y + R) && walkable(x + R, y + R);
+}
+
+// stand in the middle of a north-south street, and not with a street tree in your face
+(function pickStart() {
+  for (var n = 0; n < 24; n++) {
+    if (cellInfo(px, py).t !== 'tree' && cellInfo(px, py).t !== 'water' &&
+        cellInfo(px + 1, py).t !== 'tree' && cellInfo(px - 1, py).t !== 'tree') return;
+    py += 1;
+  }
+})();
+
+/* =========================== astronomy ============================= */
+
+function julianDay(d) {
+  var y = d.getUTCFullYear(), m = d.getUTCMonth() + 1, day = d.getUTCDate();
+  if (m <= 2) { y--; m += 12; }
+  var A = Math.floor(y / 100);
+  var B = 2 - A + Math.floor(A / 4);
+  var jd0 = Math.floor(365.25 * (y + 4716)) + Math.floor(30.6001 * (m + 1)) + day + B - 1524.5;
+  // the original dropped this: without the time of day the sun never moves
+  var frac = (d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600
+            + d.getUTCMilliseconds() / 3600000) / 24;
+  return jd0 + frac;
+}
+
+function sunPos(jd) {
+  var n = jd - 2451545.0;
+  var L = (280.460 + 0.9856474 * n) % 360; if (L < 0) L += 360;
+  var g = (357.528 + 0.9856003 * n) % 360; if (g < 0) g += 360;
+  var lambda = (L + 1.915 * Math.sin(g * Math.PI / 180) + 0.020 * Math.sin(2 * g * Math.PI / 180)) % 360;
+  var eps = 23.439 - 0.0000004 * n;
+  var ra = Math.atan2(Math.cos(eps * Math.PI / 180) * Math.sin(lambda * Math.PI / 180),
+                      Math.cos(lambda * Math.PI / 180)) * 180 / Math.PI;
+  if (ra < 0) ra += 360;
+  var dec = Math.asin(Math.sin(eps * Math.PI / 180) * Math.sin(lambda * Math.PI / 180)) * 180 / Math.PI;
+  return { ra: ra, dec: dec };
+}
+
+function lst(jd, lon) {
+  var n = jd - 2451545.0;
+  var gmst = (18.697374558 + 24.06570982441908 * n) % 24;
+  if (gmst < 0) gmst += 24;
+  return (gmst + lon / 15 + 24) % 24;
+}
+
+function altAz(raH, decD, jd, lat, lon) {
+  var ra = raH * 15, sid = lst(jd, lon) * 15, ha = (sid - ra) * Math.PI / 180;
+  var decR = decD * Math.PI / 180, latR = lat * Math.PI / 180;
+  var alt = Math.asin(Math.sin(decR) * Math.sin(latR) + Math.cos(decR) * Math.cos(latR) * Math.cos(ha)) * 180 / Math.PI;
+  var az = Math.atan2(-Math.sin(ha), Math.tan(decR) * Math.cos(latR) - Math.sin(latR) * Math.cos(ha)) * 180 / Math.PI;
+  return { alt: alt, az: az < 0 ? az + 360 : az };
+}
+
+var STARS = [
+  [18.6156, 38.78, 0.03], [2.5297, 89.26, 1.97], [5.2423, -8.20, 0.18],
+  [5.9195, 7.41, 0.50], [6.7525, -16.72, -1.46], [14.2610, 19.18, 0.05],
+  [6.3992, -52.70, -0.72], [19.8463, 8.87, 0.77], [7.6550, 5.22, 0.34],
+  [4.5987, 16.51, 0.85], [12.4433, -63.10, 1.25], [13.4200, -11.16, 0.98]
+];
+// fill the rest of the sky with a fixed procedural field
+(function () {
+  var s = 991;
+  function r() { s = (Math.imul(s, 1103515245) + 12345) & 0x7fffffff; return s / 0x7fffffff; }
+  for (var i = 0; i < 700; i++) STARS.push([r() * 24, Math.asin(r() * 2 - 1) * 180 / Math.PI, 1.6 + r() * 2.6]);
+})();
+
+/* ============================= input =============================== */
+
+var keys = {};
+var simTime = Date.now();
+
+window.addEventListener('keydown', function (e) {
+  var k = e.key.toLowerCase();
+  keys[k] = true;
+  if (k === '[') simTime -= 3600000;
+  if (k === ']') simTime += 3600000;
+  if (k === ' ' || k.indexOf('arrow') === 0) e.preventDefault();
+});
+window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
+window.addEventListener('blur', function () { keys = {}; });
+
+var dragging = false, lastX = 0, lastY = 0;
+canvas.addEventListener('mousedown', function (e) { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+window.addEventListener('mousemove', function (e) {
+  if (!dragging) return;
+  pa += (e.clientX - lastX) * 0.004;
+  pitch = Math.max(-OROWS * 0.45, Math.min(OROWS * 0.45, pitch - (e.clientY - lastY) * 0.35));
+  lastX = e.clientX; lastY = e.clientY;
+});
+window.addEventListener('mouseup', function () { dragging = false; });
+canvas.addEventListener('touchstart', function (e) {
+  dragging = true; lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+}, { passive: true });
+canvas.addEventListener('touchmove', function (e) {
+  if (!dragging) return;
+  pa += (e.touches[0].clientX - lastX) * 0.006;
+  lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+}, { passive: true });
+window.addEventListener('touchend', function () { dragging = false; });
+
+/* ============================== traffic ============================ */
+
+var CAR = [
+  ' .------. ',
+  ' |##||##| ',
+  '-[o]--[o]-'
+];
+var PED = [' o ', '/|\\', '/ \\'];
+
+var agents = [];
+
+function spawn(kind) {
+  var ang = Math.random() * Math.PI * 2, rad = 16 + Math.random() * 58;
+  var sx = px + Math.cos(ang) * rad, sy = py + Math.sin(ang) * rad;
+  var bx = Math.floor(sx / BLOCK) * BLOCK, by = Math.floor(sy / BLOCK) * BLOCK;
+  var a = {
+    kind: kind,
+    axis: Math.random() < 0.5 ? 'x' : 'y',
+    dir: Math.random() < 0.5 ? 1 : -1,
+    side: Math.random() < 0.5,
+    x: sx, y: sy, inX: false,
+    spd: kind === 'car' ? 3 + Math.random() * 5 : 0.9 + Math.random() * 0.7,
+    pal: (Math.random() * 4) | 0
+  };
+  if (kind === 'car') {
+    if (a.axis === 'y') a.x = bx + (a.dir > 0 ? 0.6 : 2.4);
+    else a.y = by + (a.dir > 0 ? 0.6 : 2.4);
+  } else {
+    if (a.axis === 'y') a.x = bx + (a.side ? 3.5 : 13.5);
+    else a.y = by + (a.side ? 3.5 : 13.5);
+  }
+  var inf = cellInfo(a.x, a.y);
+  if (kind === 'car' ? inf.t !== 'road' : inf.t !== 'sidewalk') return false;
+  agents.push(a);
+  return true;
+}
+
+function updateAgents(dt) {
+  for (var i = agents.length - 1; i >= 0; i--) {
+    var a = agents[i];
+    var dx = a.x - px, dy = a.y - py;
+    if (dx * dx + dy * dy > 8100) { agents.splice(i, 1); continue; }
+
+    if (a.axis === 'x') a.x += a.dir * a.spd * dt; else a.y += a.dir * a.spd * dt;
+
+    var mx = wrap(a.x, BLOCK), my = wrap(a.y, BLOCK);
+    var atCross = mx < 3 && my < 3;
+    if (atCross && !a.inX) {
+      a.inX = true;
+      if (Math.random() < (a.kind === 'car' ? 0.35 : 0.5)) {
+        a.axis = a.axis === 'x' ? 'y' : 'x';
+        a.dir = Math.random() < 0.5 ? 1 : -1;
+        var bx = Math.floor(a.x / BLOCK) * BLOCK, by = Math.floor(a.y / BLOCK) * BLOCK;
+        if (a.kind === 'car') {
+          if (a.axis === 'y') a.x = bx + (a.dir > 0 ? 0.6 : 2.4);
+          else a.y = by + (a.dir > 0 ? 0.6 : 2.4);
+        }
+      }
+    } else if (!atCross) a.inX = false;
+
+    // pedestrians hug the kerb; if they wander off it, turn them around
+    if (a.kind === 'ped' && cellInfo(a.x, a.y).t !== 'sidewalk') a.dir = -a.dir;
+  }
+
+  var cars = 0, peds = 0;
+  for (i = 0; i < agents.length; i++) { if (agents[i].kind === 'car') cars++; else peds++; }
+  for (i = 0; i < 3; i++) { if (cars < 26) { if (spawn('car')) cars++; } }
+  for (i = 0; i < 3; i++) { if (peds < 30) { if (spawn('ped')) peds++; } }
+}
+
+/* ============================= render ============================== */
+
+var GL = ' .:-=+*#%@';
+var LIT = [[255, 198, 120], [130, 226, 255], [255, 130, 216], [176, 255, 190]];
+var FACADE = [[42, 46, 60], [50, 42, 54], [36, 50, 56], [54, 48, 42]];
+
+var HZ = 0, dayAmt = 1, amb = 1, litProb = 0.4, haze = [0, 0, 0];
+
+function rowOf(z, d) { return HZ + (EYE - z) * VSCALE / d; }
+
+function fogOf(d) { return Math.exp(-d * 0.0125); }
+
+function depth(r, g, b, f) {
+  return col2str(r * f + haze[0] * (1 - f), g * f + haze[1] * (1 - f), b * f + haze[2] * (1 - f));
+}
+
+function groundGlyph(inf, wx, wy, t) {
+  var r = hash(Math.floor(wx * 2), Math.floor(wy * 2));
+  switch (inf.t) {
+    case 'road':
+      if (inf.stripe) return '|';
+      return r < 0.08 ? ':' : r < 0.3 ? ',' : '.';
+    case 'path': return r < 0.2 ? ',' : '.';
+    case 'sidewalk': return r < 0.5 ? ':' : ';';
+    case 'plaza': return r < 0.25 ? '+' : '.';
+    case 'yard': case 'field': return r < 0.45 ? '"' : ',';
+    case 'farm': return r < 0.5 ? '=' : '-';
+    case 'water': return (Math.sin(wx * 0.7 + t * 1.4) + Math.cos(wy * 0.9 - t * 1.1)) > 0.2 ? '~' : '-';
+    default: return '.';
+  }
+}
+
+function groundColor(inf, f) {
+  var r, g, b;
+  switch (inf.t) {
+    case 'road': r = 62; g = 64; b = 74; if (inf.stripe) { r = 190; g = 160; b = 60; } break;
+    case 'path': r = 96; g = 84; b = 62; break;
+    case 'sidewalk': r = 96; g = 98; b = 104; break;
+    case 'plaza': r = 88; g = 84; b = 76; break;
+    case 'yard': case 'field': r = 60; g = 118; b = 52; break;
+    case 'farm': r = 122; g = 108; b = 48; break;
+    case 'water': r = 26; g = 74; b = 128; break;
+    default: r = 70; g = 70; b = 70;
+  }
+  var a = inf.t === 'road' && inf.stripe ? Math.max(0.35, amb) : amb;
+  var L = inf.lamp * (1 - dayAmt) * 0.6;
+  return depth(r * a + 255 * L, g * a + 176 * L, b * a + 96 * L, f);
+}
+
+function draw(dt) {
+  var sim = new Date(simTime);
+  var jd = julianDay(sim);
+  var sun = sunPos(jd);
+  var sp = altAz(sun.ra / 15, sun.dec, jd, LAT, LON);
+  var sunAlt = sp.alt;
+
+  var k = Math.max(0, Math.min(1, (sunAlt + 6) / 12));   // 0 night .. 1 day
+  var dusk = Math.max(0, 1 - Math.abs(sunAlt) / 9);
+  dayAmt = k;
+  amb = 0.2 + 0.8 * k;
+  litProb = 0.58 - 0.38 * k;
+
+  var top = mix([3, 4, 12], [24, 58, 122], k);
+  var bot = mix([9, 11, 28], [132, 172, 212], k);
+  top = mix(top, [34, 22, 62], dusk * 0.8);
+  bot = mix(bot, [224, 112, 58], dusk * 0.85);
+  haze = [bot[0] * 0.30, bot[1] * 0.30, bot[2] * 0.32];
+
+  HZ = HORIZON - pitch;
+  buildRays();
+
+  gch.fill(undefined);
+  var tsec = simTime / 1000;
+
+  /* ---- 1. floor cast: every row below the horizon ---- */
+  var y0 = Math.max(0, Math.ceil(HZ));
+  for (var y = y0; y < OROWS; y++) {
+    var rowOff = y + 0.5 - HZ;
+    if (rowOff <= 0.001) continue;
+    var dPerp = EYE * VSCALE / rowOff;
+    if (dPerp > MAXD) continue;
+    var f = fogOf(dPerp);
+    for (var x = 0; x < OCOLS; x++) {
+      var dWorld = dPerp * RINV[x];
+      var wx = px + RC[x] * dWorld;
+      var wy = py + RS[x] * dWorld;
+      var inf = cellInfo(wx, wy);
+      setCell(x, y, groundGlyph(inf, wx, wy, tsec), groundColor(inf, f));
+    }
+  }
+
+  /* ---- 2. height field: DDA per column, front to back ---- */
+  for (var col = 0; col < OCOLS; col++) {
+    var rdx = RC[col], rdy = RS[col];
+    var cosC = 1 / RINV[col];
+    var mapX = Math.floor(px), mapY = Math.floor(py);
+    var ddX = Math.abs(1 / rdx), ddY = Math.abs(1 / rdy);
+    var stepX, stepY, sX, sY;
+    if (rdx < 0) { stepX = -1; sX = (px - mapX) * ddX; } else { stepX = 1; sX = (mapX + 1 - px) * ddX; }
+    if (rdy < 0) { stepY = -1; sY = (py - mapY) * ddY; } else { stepY = 1; sY = (mapY + 1 - py) * ddY; }
+
+    var yTop = OROWS, prev = 0, side = 0, wd = 1e9;
+
+    for (var guard = 0; guard < 900; guard++) {
+      var next = sX < sY ? sX : sY;
+      var inf2 = cellInfo(mapX, mapY);
+
+      if (inf2.h > 0) {
+        var dn = Math.max(0.25, prev * cosC);
+        var topR = rowOf(inf2.h, dn), baseR = rowOf(0, dn);
+        var t0 = Math.ceil(topR); if (t0 < 0) t0 = 0;
+        var b0 = Math.ceil(baseR); if (b0 > yTop) b0 = yTop; if (b0 > OROWS) b0 = OROWS;
+
+        if (t0 < b0) {
+          var hitx = px + rdx * prev, hity = py + rdy * prev;
+          var u = side === 0 ? hity - Math.floor(hity) : hitx - Math.floor(hitx);
+          var uu = Math.floor(u * 4);
+          var pillar = u < 0.09 || u > 0.91;
+          var f2 = fogOf(dn);
+          var sideDim = side === 1 ? 0.68 : 1;
+          var rowsPerFloor = 1.35 * VSCALE / dn;
+          var pal = FACADE[inf2.pal], lit = LIT[inf2.pal];
+          var isVeg = inf2.t === 'tree' || inf2.t === 'forest';
+
+          for (var yy = t0; yy < b0; yy++) {
+            var z = EYE - (yy + 0.5 - HZ) * dn / VSCALE;
+            var ch, cc;
+
+            if (isVeg) {
+              var rr = hash(mapX * 31 + (z * 2 | 0), mapY * 17 + uu);
+              if (z < 1.4) { ch = '|'; cc = depth(74 * amb, 54 * amb, 34 * amb, f2); }
+              else { ch = rr < 0.3 ? '&' : rr < 0.7 ? '%' : '*'; cc = depth((40 + rr * 30) * amb, (110 + rr * 70) * amb, (44 + rr * 30) * amb, f2); }
+            } else if (rowsPerFloor < 1.25) {
+              // too far to resolve floors: fall back to a brightness ramp
+              var lv = hash(mapX * 7 + (z * 1.4 | 0), mapY * 13 + uu);
+              if (lv < litProb * 0.55) {
+                ch = lv < litProb * 0.2 ? '#' : '8';
+                cc = depth(lit[0] * 0.9, lit[1] * 0.9, lit[2] * 0.9, Math.max(f2, 0.22));
+              } else {
+                var br = Math.max(0, Math.min(1, f2 * (0.35 + 0.65 * amb) * 2.4));
+                ch = GL[Math.max(1, Math.round(br * (GL.length - 1)))];
+                cc = depth(70 * amb * sideDim, 78 * amb * sideDim, 96 * amb * sideDim, f2);
+              }
+            } else {
+              var fl = Math.floor(z / 1.35);
+              var frac = z / 1.35 - fl;
+              if (frac < 0.2 || pillar) {
+                ch = pillar ? '|' : '-';
+                cc = depth(pal[0] * amb * sideDim * 1.5, pal[1] * amb * sideDim * 1.5,
+                           pal[2] * amb * sideDim * 1.5, f2);
+              } else if (hash(mapX * 13 + uu, mapY * 7 + fl * 31) < litProb) {
+                // one window, textured across its own height so it isn't a flat bar
+                var sub = Math.floor((frac - 0.2) * 5);
+                var v = hash(mapX * 3 + uu * 17 + sub, mapY * 5 + fl * 23);
+                ch = v < 0.45 ? '#' : v < 0.8 ? '8' : '%';
+                var glow = 0.72 + v * 0.35;
+                cc = depth(lit[0] * glow, lit[1] * glow, lit[2] * glow, Math.max(f2, 0.2));
+              } else {
+                ch = ((z / 1.35 - fl) * 5 | 0) % 2 ? ':' : '.';
+                cc = depth(pal[0] * amb * sideDim, pal[1] * amb * sideDim, pal[2] * amb * sideDim, f2);
+              }
+            }
+            setCell(col, yy, ch, cc);
+          }
+        }
+        if (t0 < yTop) yTop = t0;
+        if (inf2.h > EYE && wd > 1e8) wd = dn;
+      }
+
+      if (next > MAXD || yTop <= 0) break;
+      if (sX < sY) { sX += ddX; mapX += stepX; side = 0; }
+      else { sY += ddY; mapY += stepY; side = 1; }
+      prev = next;
+    }
+    skyEnd[col] = Math.min(yTop, Math.max(0, Math.ceil(HZ)));
+    wallDist[col] = wd;
+  }
+
+  /* ---- 3. sky, sun and stars ---- */
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  var gh = Math.max(2, HZ * FCH);
+  var grad = ctx.createLinearGradient(0, 0, 0, gh);
+  grad.addColorStop(0, col2str(top[0], top[1], top[2]));
+  grad.addColorStop(1, col2str(bot[0], bot[1], bot[2]));
+  ctx.fillStyle = grad;
+  var runS = 0;
+  for (var sx2 = 0; sx2 <= OCOLS; sx2++) {
+    if (sx2 === OCOLS || skyEnd[sx2] !== skyEnd[runS]) {
+      if (skyEnd[runS] > 0) ctx.fillRect(runS * FC, 0, (sx2 - runS) * FC + 1, skyEnd[runS] * FCH);
+      runS = sx2;
+    }
+  }
+
+  if (k < 0.62) {
+    var starDim = 1 - k / 0.62;
+    for (var si = 0; si < STARS.length; si++) {
+      var st = STARS[si];
+      var q = altAz(st[0], st[1], jd, LAT, LON);
+      if (q.alt <= 1) continue;
+      var pos = project(q.az, q.alt);
+      if (!pos) continue;
+      if (pos.y >= skyEnd[pos.x]) continue;
+      var m = st[2];
+      var bright = Math.max(0, Math.min(1, (4.7 - m) / 4.6)) * starDim;
+      if (bright < 0.06) continue;
+      setCell(pos.x, pos.y, m < 0.6 ? '*' : m < 2 ? '+' : '.',
+              col2str(210 * bright + 40 * bright, 220 * bright, 255 * bright));
+    }
+  }
+
+  if (sunAlt > -2) {
+    var spos = project(sp.az, sunAlt);
+    if (spos) {
+      var warm = sunAlt < 8;
+      var sc = warm ? col2str(255, 168, 90) : col2str(255, 244, 200);
+      for (var oy = -1; oy <= 1; oy++) for (var ox = -2; ox <= 2; ox++) {
+        var sxp = spos.x + ox, syp = spos.y + oy;
+        if (sxp < 0 || sxp >= OCOLS || syp < 0 || syp >= skyEnd[sxp]) continue;
+        if (Math.abs(ox) + Math.abs(oy) * 2 > 3) continue;
+        setCell(sxp, syp, '@', sc);
+      }
+    }
+  }
+
+  /* ---- 4. cars and pedestrians ---- */
+  var vis = [];
+  for (var ai = 0; ai < agents.length; ai++) {
+    var ag = agents[ai];
+    var rx = ag.x - px, ry = ag.y - py;
+    var dd = Math.sqrt(rx * rx + ry * ry);
+    if (dd < 0.5 || dd > MAXD) continue;
+    var da = norm(Math.atan2(ry, rx) - pa);
+    if (Math.abs(da) > FOV * 0.72) continue;
+    vis.push({ a: ag, d: dd, ang: da });
+  }
+  vis.sort(function (p, q2) { return q2.d - p.d; });
+
+  for (var vi = 0; vi < vis.length; vi++) {
+    var v = vis[vi], ag2 = v.a;
+    var d2 = v.d * Math.cos(v.ang);
+    if (d2 < 0.3) continue;
+    var tpl = ag2.kind === 'car' ? CAR : PED;
+    var wWorld = ag2.kind === 'car' ? 2.4 : 0.85;
+    var hWorld = ag2.kind === 'car' ? 1.5 : 1.8;
+    var cxs = OCOLS / 2 + Math.tan(v.ang) * PROJ;
+    var wcols = Math.max(1, wWorld * PROJ / d2);
+    var baseR2 = rowOf(0, d2), topR2 = rowOf(hWorld, d2);
+    var ry0 = Math.floor(topR2), ry1 = Math.max(ry0 + 1, Math.ceil(baseR2));
+    var span = Math.max(0.001, baseR2 - topR2);
+    var xs0 = cxs - wcols / 2;
+    var f3 = Math.max(0.12, fogOf(d2));
+
+    var toward = (ag2.axis === 'x' ? ag2.dir * (ag2.x - px) : ag2.dir * (ag2.y - py)) < 0;
+    var lampCol = toward ? col2str(255, 250, 220) : col2str(255, 70, 50);
+    var bodyCol = depth(64 + ag2.pal * 18, 68, 82, f3);
+    var pedCol = depth(150 * amb + 46, 152 * amb + 44, 168 * amb + 50, f3);
+
+    for (var sy3 = Math.max(0, ry0); sy3 < Math.min(OROWS, ry1); sy3++) {
+      var tr = Math.floor((sy3 + 0.5 - topR2) / span * tpl.length);
+      if (tr < 0) tr = 0; if (tr >= tpl.length) tr = tpl.length - 1;
+      for (var sx3 = Math.max(0, Math.floor(xs0)); sx3 < Math.min(OCOLS, Math.ceil(xs0 + wcols)); sx3++) {
+        if (d2 >= wallDist[sx3]) continue;
+        var tc = Math.floor((sx3 + 0.5 - xs0) / wcols * tpl[0].length);
+        if (tc < 0) tc = 0; if (tc >= tpl[0].length) tc = tpl[0].length - 1;
+        var g2 = tpl[tr][tc];
+        if (g2 === ' ') continue;
+        setCell(sx3, sy3, g2,
+          ag2.kind === 'car' ? (g2 === 'o' ? lampCol : bodyCol) : pedCol);
+      }
+    }
+  }
+
+  /* ---- 5. blit the character grid ---- */
+  ctx.font = FONT + 'px ui-monospace, Menlo, Consolas, monospace';
+  for (var by2 = 0; by2 < OROWS; by2++) {
+    var base = by2 * OCOLS, run = '', runCol = null, runStart = 0;
+    for (var bx2 = 0; bx2 < OCOLS; bx2++) {
+      var ch2 = gch[base + bx2];
+      if (ch2 === undefined || ch2 === ' ') {
+        if (run) { ctx.fillStyle = runCol; ctx.fillText(run, runStart * FC, by2 * FCH); run = ''; }
+        continue;
+      }
+      var cl = gcol[base + bx2];
+      if (run && cl !== runCol) { ctx.fillStyle = runCol; ctx.fillText(run, runStart * FC, by2 * FCH); run = ''; }
+      if (!run) { runStart = bx2; runCol = cl; }
+      run += ch2;
+    }
+    if (run) { ctx.fillStyle = runCol; ctx.fillText(run, runStart * FC, by2 * FCH); }
+  }
+
+  return sunAlt;
+}
+
+function project(azDeg, altDeg) {
+  var theta = (90 - azDeg) * Math.PI / 180;
+  var da = norm(theta - pa);
+  if (Math.abs(da) > FOV * 0.7) return null;
+  var x = Math.round(OCOLS / 2 + Math.tan(da) * PROJ);
+  var y = Math.round(HZ - Math.tan(Math.min(85, altDeg) * Math.PI / 180) * VSCALE);
+  if (x < 0 || x >= OCOLS || y < 0 || y >= OROWS) return null;
+  return { x: x, y: y };
+}
+
+function norm(a) { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; }
+function mix(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+
+/* ============================== loop =============================== */
+
+function update(dt) {
+  var sp2 = (keys['shift'] ? 11 : 4.2) * dt;
+  var fx = Math.cos(pa), fy = Math.sin(pa);
+  var mx = 0, my = 0;
+  if (keys['w'] || keys['arrowup']) { mx += fx; my += fy; }
+  if (keys['s'] || keys['arrowdown']) { mx -= fx; my -= fy; }
+  if (keys['a']) { mx += fy; my -= fx; }
+  if (keys['d']) { mx -= fy; my += fx; }
+  if (keys['arrowleft']) pa -= 1.8 * dt;
+  if (keys['arrowright']) pa += 1.8 * dt;
+  var l = Math.sqrt(mx * mx + my * my);
+  if (l > 0) {
+    mx = mx / l * sp2; my = my / l * sp2;
+    if (freeAt(px + mx, py)) px += mx;
+    if (freeAt(px, py + my)) py += my;
+    px = wrap(px, WORLD); py = wrap(py, WORLD);
+  }
+  updateAgents(dt);
+}
+
+var lastT = performance.now(), fps = 60, acc = 0, frames = 0;
+var clockEl = document.getElementById('clock');
+var phaseEl = document.getElementById('phase');
+var locEl = document.getElementById('loc');
+var warpvEl = document.getElementById('warpv');
+
+function frame() {
+  var t = performance.now();
+  var dt = Math.min(0.05, (t - lastT) / 1000);
+  lastT = t;
+  acc += dt; frames++;
+  if (acc > 0.5) { fps = frames / acc; acc = 0; frames = 0; }
+
+  var warp = Math.pow(10, (+warpEl.value) / 25);
+  simTime += dt * 1000 * warp;
+
+  update(dt);
+  var sunAlt = draw(dt);
+
+  warpvEl.textContent = (warp < 10 ? warp.toFixed(1) : Math.round(warp)) + 'x';
+  var local = new Date(simTime + LON / 15 * 3600000);
+  var hh = ('0' + local.getUTCHours()).slice(-2), mm = ('0' + local.getUTCMinutes()).slice(-2);
+  clockEl.textContent = hh + ':' + mm;
+  phaseEl.textContent = sunAlt > 0 ? '(day)' : sunAlt > -6 ? '(twilight)' : '(night)';
+  locEl.textContent = 'x ' + px.toFixed(0) + '  y ' + py.toFixed(0) +
+    '  ·  ' + OCOLS + 'x' + OROWS + ' cells  ·  ' + fps.toFixed(0) + ' fps';
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
