@@ -107,7 +107,7 @@ Areas are capped at roughly 2 km a side. Overpass is a free, volunteer-run
 service, and a request for a whole country is how you get blocked from it.
 
 The public mirrors are individually unreliable, and which one is healthy
-varies by the minute, on 2026-08-17, two of the four were returning 504 after
+varies by the minute. On 2026-08-17, two of the four were returning 504 after
 half a minute apiece. So the engine learns as it goes: the instance that
 answered is remembered (for six hours, across reloads) and used for the rest
 of the load, and one that failed is set aside for ten minutes. The first pick

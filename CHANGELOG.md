@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The error only ever reported the *last* failure, so it said "That Overpass
   instance is busy" when all of them were, and could not tell being offline
   from being blocked. It now reports every attempt.
-- A load was never actually cancelled when superseded, it ran to completion
+- A load was never actually cancelled when superseded. It ran to completion
   against a volunteer service and its result was discarded.
 - An already-aborted signal was ignored, because the abort was only listened
   for, never checked.
