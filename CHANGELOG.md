@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Half-block rendering mode**, toggled with `B`: double vertical resolution,
+  scene painted as solid colour. Adapted from a parallel implementation by
+  another agent. Kept as a mode rather than a replacement, because glyphs
+  encode road markings, water, foliage and lit windows.
+- **Street names are written along their street** as projected, so a road
+  heading away reads down the screen and one crossing your view reads across,
+  swapping as you turn. Names are abbreviated (`W 42ND ST`).
+
+### Changed
+- Ground speed up about 40%, and travel speed now scales with altitude,
+  capped so the fastest case crosses an extract in about four seconds.
+- Every rendering test drives the real `Screen` class. They used to build
+  their own fakes, which meant a rewrite of `screen.js` could pass the whole
+  suite untouched.
+
+### Fixed
+- A vertical label spans many rows, each a different ground distance. Testing
+  them all against the single anchor distance failed for the near half, so the
+  street you were standing on was never named.
+- Half-block runs are batched per half-row rather than per matching pair.
+  Requiring both halves to match roughly squares the chance of a break and
+  collapsed runs to about one cell.
+
 ## [1.1.0] - 2026-08-16
 
 ### Added

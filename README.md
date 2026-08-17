@@ -38,6 +38,7 @@ refuse to load modules over `file://`. The pre-refactor single-file version in
 | `Shift` | Boost, on the ground and in the air |
 | Arrow keys | Move and turn |
 | `N` | Cycle labels: off / streets / streets and landmarks |
+| `B` | Toggle half-block rendering |
 | `T` | Cycle traffic: off / cars / cars and people |
 | Click | Identify a building, a street or a star |
 | `Esc` | Close the panel |
@@ -53,7 +54,11 @@ map data: street names, building names, heights, addresses, construction dates.
 
 - The HUD always names the street you are on and the nearest crossing.
 - Named streets label themselves whenever they are in view, one label per
-  street, depth-tested so buildings occlude them.
+  street, depth-tested so buildings occlude them. A name is written **along**
+  its street as it appears on screen: down the screen for a street heading
+  away from you, across for one crossing your view, swapping as you turn. At a
+  junction that is the difference between knowing which name belongs to which
+  street and guessing.
 - Notable buildings, meaning named and either tall or carrying a Wikipedia
   link, name themselves as you approach.
 - Click anything. A building gives its name, type, real height and floor
@@ -128,6 +133,14 @@ in front, and DDA cells are contiguous so spans always overlap.
 level however high you are; only its distance changes. What sells altitude is
 rooftops becoming visible and the ground flattening into a map.
 
+**Two rendering modes.** `B` switches between one character per cell and
+half-blocks, which run the grid at double vertical resolution and paint the
+scene as solid colour. Blocks are sharper and much more vivid, because a glyph
+only inks part of its cell and silently dims everything it draws. Glyphs carry
+information blocks cannot: road markings, water, foliage, lit windows. Blocks
+do about 2.1x the canvas draw calls and are still ~13% faster to blit, because
+`fillRect` is much cheaper than `fillText`.
+
 **Transparency.** Foliage is see-through, which the original occlusion scheme
 could not express: a single bottom-anchored watermark per column is only
 correct for opaque spans. Coverage is now a per-column bitmask, with a fast
@@ -141,7 +154,7 @@ thousand times per frame.
 ## Tools
 
 ```bash
-npm test                                  # 144 tests, no network
+npm test                                  # 158 tests, no network
 node tools/render-frame.js --z 60 --pitch 15    # render a frame as text
 node tools/map-preview.js --city london         # top-down map of an import
 ```
