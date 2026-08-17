@@ -15,7 +15,7 @@
  * varies by the minute. Measured 2026-08-17: overpass-api.de answered in 1.7s
  * while private.coffee and kumi.systems both returned 504 after 32s, each with
  * fifteen queries backed up server-side. Treat this list as a point-in-time
- * sample, not a ranking — see orderEndpoints() for how health is learned at
+ * sample, not a ranking. See orderEndpoints() for how health is learned at
  * runtime rather than hard-coded here.
  *
  * Two traps, both of which cost real debugging time:
@@ -527,7 +527,7 @@ export async function fetchOsm(bbox, { onProgress = () => {}, signal } = {}) {
       timeoutMs: CORE_TIMEOUT_MS });
 
   // Best effort. A missing river is worth far less than a failed load, so
-  // these get one attempt on a short budget — and because the core query just
+  // these get one attempt on a short budget, and because the core query just
   // marked a winner, that one attempt is the instance that has already
   // answered us seconds ago.
   const bestEffort = async (layer, label) => {

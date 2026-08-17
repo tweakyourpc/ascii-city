@@ -3,9 +3,9 @@ import { FOV, EYE_HEIGHT, MIN_CAM_Z, MAX_CAM_Z } from './config.js';
 /**
  * Camera state and the per-column ray tables.
  *
- * `z` is free — the camera flies. The two projection helpers below are exact
- * inverses of each other, which is what lets the renderer turn a screen row
- * back into a world distance for floor and roof casting:
+ * `z` is free, because the camera flies. The two projection helpers below are
+ * exact inverses of each other, which is what lets the renderer turn a screen
+ * row back into a world distance for floor and roof casting:
  *
  *     rowOf(z, d)   world height + distance -> screen row
  *     distOf(z, row) world height + screen row -> distance

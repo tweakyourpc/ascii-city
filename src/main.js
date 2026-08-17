@@ -326,7 +326,7 @@ function handleClick(c) {
   const col = Math.floor((c.x - r.left) / screen.cw);
   const row = Math.floor((c.y - r.top) / screen.ch);
 
-  // A click on the panel itself dismisses it rather than picking through it —
+  // A click on the panel itself dismisses it rather than picking through it,
   // unless it landed on a link, in which case follow it and leave the card up.
   const box = panel.rect(screen);
   if (box && col >= box.x && col < box.x + box.w &&
