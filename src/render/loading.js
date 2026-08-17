@@ -7,19 +7,29 @@ import { col2str } from '../screen.js';
  * nothing and keeps the whole surface in one idiom.
  */
 
-const BANNER = [
-  ' _   ___  ___ _ _   ___ _ _ _  _ ',
-  '/_\\ / __|/ __| | | | __| | | || |',
-  '/ _ \\\\__ \\ (__| | | | _|| | | __ |',
-  '/_/ \\_\\___/\\___|_|_| |___|_|_|_||_|',
+/**
+ * Every row is the same width on purpose. The rows are letterforms sliced
+ * horizontally, so they only read as letters while their columns stay in step,
+ * and the block below is positioned once for all four rows rather than each
+ * row being centred on its own length.
+ */
+export const BANNER = [
+  '   _   ___  ___ ___ ___    ___ ___ _______   __',
+  '  /_\\ / __|/ __|_ _|_ _|  / __|_ _|_   _\\ \\ / /',
+  ' / _ \\\\__ \\ (__ | | | |  | (__ | |  | |  \\ V / ',
+  '/_/ \\_\\___/\\___|___|___|  \\___|___| |_|   |_|  ',
 ];
+
+const BANNER_W = BANNER[0].length;
 
 const SPIN = ['.  ', '.. ', '...', ' ..', '  .', '   '];
 
 export function drawLoading(screen, { title, detail, t }) {
-  const dim = col2str(24, 88, 104);
   const bright = col2str(126, 231, 255);
   const accent = col2str(255, 212, 121);
+  // Bright enough to read as letters, dark enough not to compete with the
+  // status line, which is the part that actually changes.
+  const letters = col2str(58, 132, 152);
 
   screen.ctx.fillStyle = '#04080c';
   screen.ctx.fillRect(0, 0, screen.width, screen.height);
@@ -34,10 +44,15 @@ export function drawLoading(screen, { title, detail, t }) {
     }
   }
 
-  if (screen.cols > 40) {
+  // One offset for the whole block. Centring each row on its own length shears
+  // the letters by a column wherever two rows differ in width.
+  if (screen.cols >= BANNER_W + 4) {
+    const x0 = Math.floor((screen.cols - BANNER_W) / 2);
+    // Clear first, or a dot from the grid above lands in the gap between the
+    // two words and reads as punctuation.
+    screen.clearBox(x0, mid - 5, BANNER_W, BANNER.length);
     for (let i = 0; i < BANNER.length; i++) {
-      const x0 = Math.floor((screen.cols - BANNER[i].length) / 2);
-      screen.text(x0, mid - 5 + i, BANNER[i], dim);
+      screen.text(x0, mid - 5 + i, BANNER[i], letters);
     }
   }
 
