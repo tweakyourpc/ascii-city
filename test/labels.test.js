@@ -13,6 +13,7 @@ import { renderScene } from '../src/render/raycaster.js';
 import { Labels, MODE } from '../src/render/labels.js';
 import { T } from '../src/world/source.js';
 import { FOV, HORIZON_FRAC, FLOOR_H } from '../src/config.js';
+import { makeScreen } from './support/screen.js';
 
 /* ------------------------------- fixtures ------------------------------- */
 
@@ -70,43 +71,6 @@ function city(extra = []) {
   return new OsmWorld(BBOX, [...ways, ...extra], 'Test City');
 }
 
-function makeScreen(cols, rows) {
-  const cw = 8;
-  const ch = 15;
-  const proj = (cols / 2) / Math.tan(FOV / 2);
-  const s = {
-    cols, rows, cw, ch, proj,
-    vscale: proj * cw / ch,
-    horizon: Math.floor(rows * HORIZON_FRAC),
-    glyph: new Array(cols * rows),
-    colour: new Array(cols * rows),
-    depth: new Float32Array(cols * rows),
-    skyEnd: new Int32Array(cols),
-    covWords: ((rows + 31) >> 5),
-    cov: new Uint32Array((rows + 31) >> 5),
-    hasHoles: new Uint8Array(cols),
-    holeMask: new Uint32Array(cols * ((rows + 31) >> 5)),
-    scrims: [],
-    set(x, y, g, c) {
-      if (x < 0 || x >= cols || y < 0 || y >= rows) return;
-      this.glyph[y * cols + x] = g;
-      this.colour[y * cols + x] = c;
-    },
-    setDepth(x, y, g, c, d) {
-      if (x < 0 || x >= cols || y < 0 || y >= rows) return;
-      const i = y * cols + x;
-      this.glyph[i] = g;
-      this.colour[i] = c;
-      this.depth[i] = d;
-    },
-    fillRow(y, g, c, d) {
-      for (let x = 0; x < cols; x++) this.setDepth(x, y, g, c, d);
-    },
-  };
-  s.glyph.fill(undefined);
-  s.depth.fill(1e9);
-  return s;
-}
 
 /** Render a frame and return the label layer plus the screen text. */
 function frame(world, { z, pitch, angle = Math.PI / 2, x, y, cols = 140, rows = 36,
@@ -207,7 +171,8 @@ test('street labels are drawn at street level', () => {
   const w = city();
   const { text, labels } = frame(w, { z: 1.7, pitch: 2 });
   assert.ok(labels.lastCounts.streets > 0, 'no street labels drawn');
-  assert.match(text, /5TH AVENUE|WEST 4\dTH STREET/);
+  // Names are abbreviated: "West 40th Street" reads "W 40TH ST".
+  assert.match(text, /5TH AVE|W 4\dTH ST/);
 });
 
 test('street labels survive at drone altitude', () => {
@@ -244,10 +209,78 @@ test('each street name appears at most once', () => {
 test('labels are padded so surrounding texture does not read as letters', () => {
   const w = city();
   const { lines } = frame(w, { z: 95, pitch: 15 });
-  const hit = lines.find((l) => l.includes('AVENUE') || l.includes('STREET'));
-  assert.ok(hit, 'no label to check');
+  // A horizontally written label: cross streets run across the view when you
+  // face along an avenue.
+  const hit = lines.find((l) => /\b(AVE|ST)\b/.test(l));
+  assert.ok(hit, 'no horizontal label to check');
   const m = /([A-Z0-9]+ )+[A-Z0-9]+/.exec(hit);
   assert.ok(m, 'label letters are not contiguous with single spaces between words');
+});
+
+/* ---------------------------- label orientation --------------------------- */
+
+/** Read a label back off the grid, horizontally or vertically. */
+function findLabel(screen, name) {
+  const { cols, rows, glyph } = screen;
+  const at = (x, y) => {
+    const g = glyph[y * cols + x];
+    return g === undefined ? ' ' : g;
+  };
+  for (let y = 0; y < rows; y++) {
+    let line = '';
+    for (let x = 0; x < cols; x++) line += at(x, y);
+    if (line.includes(name)) return 'horizontal';
+  }
+  for (let x = 0; x < cols; x++) {
+    for (const step of [1, 2]) {
+      let col = '';
+      for (let y = 0; y < rows; y += step) col += at(x, y);
+      if (col.includes(name)) return 'vertical';
+    }
+  }
+  return null;
+}
+
+test('a street running away from you is labelled down the screen', () => {
+  // Facing north along an avenue: the avenue heads away, so its name should
+  // read vertically; the cross streets run across, so theirs stay horizontal.
+  const w = city();
+  const { screen } = frame(w, {
+    z: 3, pitch: 2, angle: Math.PI / 2, cols: 120, rows: 34,
+    x: w.proj.x(-73.9860), y: w.proj.y(40.7545),
+  });
+  assert.equal(findLabel(screen, '5TH AVE'), 'vertical',
+    'the avenue you are on should be written down the screen');
+});
+
+test('the same street lies down when you view it from the side', () => {
+  // Orientation is derived from the projection, so it follows the camera
+  // rather than being baked into the data. 5th Avenue runs north-south:
+  // looked along, its name reads down the screen; looked at from the side, it
+  // reads across.
+  const w = city();
+  const base = { z: 3, pitch: 2, cols: 120, rows: 34 };
+
+  const along = frame(w, {
+    ...base, angle: Math.PI / 2,                       // north, up the avenue
+    x: w.proj.x(-73.9860), y: w.proj.y(40.7545),
+  });
+  const across = frame(w, {
+    ...base, angle: 0,                                 // east, at it broadside
+    x: w.proj.x(-73.9884), y: w.proj.y(40.7545),
+  });
+
+  const a = findLabel(along.screen, '5TH AVE');
+  const b = findLabel(across.screen, '5TH AVE');
+  assert.equal(a, 'vertical', 'looked along, the avenue should read downwards');
+  assert.equal(b, 'horizontal', 'seen broadside, the avenue should read across');
+});
+
+test('street names are abbreviated so a vertical label is not a wall of text', () => {
+  const w = city();
+  const { text } = frame(w, { z: 95, pitch: 15 });
+  assert.doesNotMatch(text, /AVENUE|STREET/,
+    'labels should be abbreviated to AVE and ST');
 });
 
 test('a landmark names itself on approach', () => {

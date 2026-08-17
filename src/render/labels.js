@@ -24,8 +24,18 @@ const LANDMARK_CAP = 4;
 // Collection" is 48 characters and takes a third of the screen.
 const MAX_NAME = 26;
 
+const ABBREV = [
+  [/\bSTREET\b/g, 'ST'], [/\bAVENUE\b/g, 'AVE'], [/\bBOULEVARD\b/g, 'BLVD'],
+  [/\bROAD\b/g, 'RD'], [/\bDRIVE\b/g, 'DR'], [/\bLANE\b/g, 'LN'],
+  [/\bPLACE\b/g, 'PL'], [/\bSQUARE\b/g, 'SQ'], [/\bCOURT\b/g, 'CT'],
+  [/\bTERRACE\b/g, 'TER'], [/\bPARKWAY\b/g, 'PKWY'], [/\bHIGHWAY\b/g, 'HWY'],
+  [/\bNORTH\b/g, 'N'], [/\bSOUTH\b/g, 'S'], [/\bEAST\b/g, 'E'], [/\bWEST\b/g, 'W'],
+];
+
 function short(name) {
-  const s = name.toUpperCase();
+  let s = name.toUpperCase();
+  for (const [re, to] of ABBREV) s = s.replace(re, to);
+  s = s.replace(/\s+/g, ' ').trim();
   return s.length <= MAX_NAME ? s : s.slice(0, MAX_NAME - 1).replace(/[ .,-]+$/, '') + '.';
 }
 
@@ -142,18 +152,82 @@ export class Labels {
     let placed = 0;
     for (let k = 0; k < order.length && placed < STREET_CAP; k++) {
       const nm = order[k];
-      const text = ` ${short(world.streetNames[nm])} `;
+      const label = short(world.streetNames[nm]);
       const d = this.dist[nm];
       const f = Math.max(0.10, fogOf(d));
       const colour = L.depth(198 * L.amb + 46, 210 * L.amb + 48, 226 * L.amb + 52, f);
-      const x = Math.round(this.col[nm] - text.length / 2);
-      const y = Math.round(this.row[nm]);
-      if (this._place(screen, x, y, text, colour, d, 2)) {
+
+      // Which way does this street run on screen? A street heading away from
+      // you projects toward the vanishing point and reads down the screen; a
+      // cross street reads across it. Writing every name horizontally is why
+      // you cannot tell which name belongs to which street at a junction.
+      const vertical = this._runsVertically(screen, cam, A, this.best[nm], fwdX, fwdY);
+      const text = vertical ? label : ` ${label} `;
+      const step = screen.rowStep || 1;
+
+      let x;
+      let y;
+      if (vertical) {
+        x = Math.round(this.col[nm]);
+        y = Math.round(this.row[nm]) - Math.floor(text.length / 2) * step;
+      } else {
+        x = Math.round(this.col[nm] - text.length / 2);
+        y = Math.round(this.row[nm]);
+      }
+      y -= y % step;
+
+      // A label lying on the ground spans many rows when written vertically,
+      // and every row is a different distance. Test each cell against the
+      // ground distance at ITS row, or the near half of the label always
+      // fails and the street you are standing on never gets named.
+      const depthFor = vertical
+        ? (row) => cam.z * cam.vscale / Math.max(0.5, row + 0.5 - cam.hz)
+        : null;
+
+      if (this._place(screen, x, y, text, colour, d, 2, vertical, step, depthFor)) {
         this.drawn.add(nm);
         placed++;
       }
     }
     this.lastCounts.streets = placed;
+  }
+
+  /**
+   * Project a short piece of the street either side of its anchor and compare
+   * the screen-space run. More vertical than horizontal means the street is
+   * heading away from the camera, so its name should read down the screen.
+   *
+   * Because it is computed from the projection, it follows the camera: turn
+   * ninety degrees and a name that was stacked vertically lies down flat.
+   */
+  _runsVertically(screen, cam, A, i, fwdX, fwdY) {
+    if (i === undefined || !A.dx) return false;
+    const K = 8;                                   // cells either side
+    let dCol = 0;
+    let dRow = 0;
+    let seen = 0;
+    let prevCol = 0;
+    let prevRow = 0;
+
+    for (const t of [-K, K]) {
+      const wx = A.x[i] + A.dx[i] * t - cam.x;
+      const wy = A.y[i] + A.dy[i] * t - cam.y;
+      const along = wx * fwdX + wy * fwdY;
+      if (along < 2) continue;                     // behind us or on top of us
+      const side = -wx * fwdY + wy * fwdX;
+      const col = screen.cols / 2 - (side / along) * cam.proj;
+      const row = cam.hz + cam.z * cam.vscale / along;
+      if (seen++) { dCol = col - prevCol; dRow = row - prevRow; }
+      prevCol = col;
+      prevRow = row;
+    }
+    if (seen < 2) return false;
+
+    // Rows are taller than columns, so compare in pixels, not cells, or a
+    // street at 45 degrees would be called vertical.
+    const px = Math.abs(dCol) * screen.cw;
+    const py = Math.abs(dRow) * screen.ch;
+    return py > px;
   }
 
   _landmarks(screen, cam, world, L, fwdX, fwdY) {
@@ -217,50 +291,80 @@ export class Labels {
    * A label is drawn only if most of it is unoccluded: partially hidden text
    * reads as corruption rather than as depth.
    */
-  _place(screen, x, y, text, colour, d, nudge) {
+  /**
+   * Place a label, either across the screen or down it, nudging sideways to
+   * find clear space.
+   *
+   * A label is drawn only if all of it is unoccluded: skipping individual
+   * hidden characters leaves city texture between the letters, which reads as
+   * corruption rather than as depth.
+   */
+  _place(screen, x, y, text, colour, d, nudge, vertical = false, step = 1,
+         depthFor = null) {
     const { cols, rows, depth } = screen;
     const len = text.length;
-    if (len === 0 || len > cols) return false;
-    if (x < 0) x = 0;
-    if (x + len > cols) x = cols - len;
+    if (len === 0) return false;
+
+    const spanX = vertical ? 1 : len;
+    const spanY = vertical ? (len - 1) * step + 1 : 1;
+    if (spanX > cols || spanY > rows) return false;
 
     for (let n = 0; n <= nudge; n++) {
       for (let pass = 0; pass < (n === 0 ? 1 : 2); pass++) {
-        const yy = n === 0 ? y : (pass === 0 ? y - n : y + n);
-        if (yy < 0 || yy >= rows) continue;
-        const base = yy * cols;
+        const off = n === 0 ? 0 : (pass === 0 ? -n : n);
+        // Nudge across the label, never along it.
+        let xx = vertical ? x + off : x;
+        let yy = vertical ? y : y + off * step;
 
+        xx = Math.max(0, Math.min(cols - spanX, xx));
+        yy = Math.max(0, Math.min(rows - spanY, yy));
+        yy -= yy % step;
+
+        const cx = (i) => (vertical ? xx : xx + i);
+        const cy = (i) => (vertical ? yy + i * step : yy);
+
+        // Occupancy, with a one-cell margin so labels never touch.
         let free = true;
-        const x0 = Math.max(0, x - 1);
-        const x1 = Math.min(cols, x + len + 1);
-        for (let i = x0; i < x1; i++) {
-          if (this.mask[base + i]) { free = false; break; }
+        for (let i = -1; i <= len && free; i++) {
+          const k = Math.max(0, Math.min(len - 1, i));
+          const ax = cx(k) + (!vertical && i < 0 ? -1 : !vertical && i >= len ? 1 : 0);
+          const ay = cy(k) + (vertical && i < 0 ? -step : vertical && i >= len ? step : 0);
+          for (let m = -1; m <= 1; m++) {
+            const mx = vertical ? ax + m : ax;
+            const my = vertical ? ay : ay + m;
+            if (mx < 0 || mx >= cols || my < 0 || my >= rows) continue;
+            if (this.mask[my * cols + mx]) { free = false; break; }
+          }
         }
         if (!free) continue;
 
-        // A street label's row is by construction the row whose floor-cast
-        // distance equals the anchor's, so an exact test fails on rounding for
-        // exactly the cells that should pass. Hence the bias.
-        // All or nothing. Skipping individual occluded characters leaves the
-        // city texture showing between the letters, so "WEST 42ND STREET"
-        // comes out as "WEST 42N=+STREET" and reads as corruption rather than
-        // as depth. If it does not fit cleanly here, nudge and try again.
+        // A street label sits on the row whose floor-cast distance equals the
+        // anchor's, so an exact depth test fails on rounding for exactly the
+        // cells that should pass. Hence the bias.
         let ink = 0;
         let hidden = 0;
         for (let i = 0; i < len; i++) {
           if (text[i] === ' ') continue;
           ink++;
-          if (d > depth[base + x + i] * 1.02 + 0.5) { hidden++; break; }
+          const want = depthFor ? depthFor(cy(i)) : d;
+          if (want > depth[cy(i) * cols + cx(i)] * 1.02 + 0.5) { hidden = 1; break; }
         }
-        if (ink === 0 || hidden > 0) continue;
+        if (ink === 0 || hidden) continue;
 
-        // Spaces are written as blanks rather than skipped, for the same
-        // reason: ground texture in the gaps between words reads as letters.
-        for (let i = 0; i < len; i++) screen.set(x + i, yy, text[i], colour);
-        for (let i = x0; i < x1; i++) {
-          this.mask[base + i] = 1;
-          if (yy > 0) this.mask[base - cols + i] = 1;
-          if (yy + 1 < rows) this.mask[base + cols + i] = 1;
+        // Spaces are written as blanks rather than skipped: ground texture in
+        // the gaps between words otherwise reads as letters.
+        for (let i = 0; i < len; i++) screen.set(cx(i), cy(i), text[i], colour);
+
+        for (let i = -1; i <= len; i++) {
+          const k = Math.max(0, Math.min(len - 1, i));
+          const ax = cx(k) + (!vertical && i < 0 ? -1 : !vertical && i >= len ? 1 : 0);
+          const ay = cy(k) + (vertical && i < 0 ? -step : vertical && i >= len ? step : 0);
+          for (let m = -1; m <= 1; m++) {
+            const mx = vertical ? ax + m : ax;
+            const my = vertical ? ay : ay + m;
+            if (mx < 0 || mx >= cols || my < 0 || my >= rows) continue;
+            this.mask[my * cols + mx] = 1;
+          }
         }
         return true;
       }

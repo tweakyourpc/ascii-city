@@ -89,9 +89,14 @@ const PED_LOD = [
   ],
 ];
 
-/** Pick a detail level from how many rows the sprite covers. */
-function lodFor(rows) {
-  return rows >= 14 ? 2 : rows >= 6 ? 1 : 0;
+/**
+ * Pick a detail level from how many TEXT LINES the sprite covers. Internal
+ * rows are twice as fine in block mode, so the span is divided by rowStep or
+ * every sprite jumps to the highest detail level when the mode changes.
+ */
+function lodFor(rows, rowStep) {
+  const lines = rows / rowStep;
+  return lines >= 14 ? 2 : lines >= 6 ? 1 : 0;
 }
 
 /**
@@ -292,7 +297,7 @@ export class Traffic {
       const y0 = Math.floor(topR);
       const y1 = Math.max(y0 + 1, Math.ceil(baseR));
       const span = Math.max(0.001, baseR - topR);
-      const lod = lodFor(span);
+      const lod = lodFor(span, screen.rowStep || 1);
 
       // Which face of the car is toward us: its heading against the view ray.
       let tpl;

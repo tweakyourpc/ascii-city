@@ -179,7 +179,7 @@ export class Hud {
   }
 
   update({ warp, simTime, lon, sunAlt, cam, screen, fps, where,
-           labelMode, trafficMode }) {
+           labelMode, trafficMode, renderMode }) {
     this.warpv.textContent = (warp < 10 ? warp.toFixed(1) : Math.round(warp)) + 'x';
 
     const local = new Date(simTime + lon / 15 * 3600000);
@@ -202,7 +202,8 @@ export class Hud {
     const altM = Math.round(cam.z * METERS_PER_CELL);
     this.loc.textContent =
       `x ${cam.x.toFixed(0)}  y ${cam.y.toFixed(0)}  ·  alt ${altM} m` +
-      `  ·  ${screen.cols}x${screen.rows} cells  ·  ${fps.toFixed(0)} fps` +
+      `  ·  ${screen.cols}x${screen.outRows} cells  ·  ${fps.toFixed(0)} fps` +
+      (renderMode === 1 ? '  ·  blocks' : '') +
       (labelMode === 0 ? '  ·  labels off' : '') +
       (trafficMode === 0 ? '  ·  traffic off' : '');
   }

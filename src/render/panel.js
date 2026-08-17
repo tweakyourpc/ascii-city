@@ -95,7 +95,12 @@ export class Panel {
    * Must agree exactly with draw(), or clicks land in a box that is not there.
    */
   rect(screen) {
-    return this._layout ?? null;
+    // Stored in output lines; returned in internal rows, because clicks are
+    // mapped to internal rows and so is everything else that indexes the grid.
+    const L = this._layout;
+    if (!L) return null;
+    const step = screen.rowStep || 1;
+    return { x: L.x, y: L.y * step, w: L.w, h: L.h * step };
   }
 
   /** Build the panel's lines: [text, colour, indent] triples. */
@@ -184,26 +189,24 @@ export class Panel {
     rows.push(['', null]);
     rows.push([`${L.footer}`.slice(0, inner - 12), FRAME]);
 
-    const h = Math.min(MAX_ROWS, rows.length + 2, screen.rows - 2);
+    const h = Math.min(MAX_ROWS, rows.length + 2, screen.outRows - 2);
     const x = 2;
-    const y = screen.rows - h - 1;
+    const y = screen.outRows - h - 1;
     this._layout = { x, y, w, h };
 
     screen.scrim(x, y, w, h, 'rgba(4,10,14,0.90)');
 
-    // Clear the cells first. The scrim paints under the glyph layer, so
-    // without this the city behind the panel blits straight over the top of
-    // it. Blanks are transparent at blit time, so the scrim shows through.
-    for (let r = 0; r < h; r++) {
-      for (let c = 0; c < w; c++) screen.set(x + c, y + r, ' ', FRAME);
-    }
+    // Clear first. The scrim paints under the glyph layer, so without this
+    // the city behind the panel blits straight over the top of it. Blanks are
+    // transparent at blit time, so the scrim shows through.
+    screen.clearBox(x, y, w, h);
 
     const bar = '-'.repeat(w - 2);
     screen.text(x, y, `+${bar}+`, FRAME);
     screen.text(x, y + h - 1, `+${bar}+`, FRAME);
     for (let r = 1; r < h - 1; r++) {
-      screen.set(x, y + r, '|', FRAME);
-      screen.set(x + w - 1, y + r, '|', FRAME);
+      screen.text(x, y + r, '|', FRAME);
+      screen.text(x + w - 1, y + r, '|', FRAME);
     }
 
     // "[esc]" sits on the bottom rule so it never costs a content row.

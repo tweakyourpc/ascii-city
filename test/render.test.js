@@ -16,6 +16,7 @@ import { ChunkedWorld, T } from '../src/world/source.js';
 import { Lighting } from '../src/render/materials.js';
 import { renderScene } from '../src/render/raycaster.js';
 import { FOV, HORIZON_FRAC } from '../src/config.js';
+import { makeScreen } from './support/screen.js';
 
 /* --------------------------- synthetic fixtures --------------------------- */
 
@@ -82,44 +83,6 @@ class TreeWorld extends ChunkedWorld {
       }
     }
   }
-}
-
-/** Minimal Screen stand-in: same buffers and contract, no canvas. */
-function makeScreen(cols, rows) {
-  const cw = 8;
-  const ch = 15;
-  const proj = (cols / 2) / Math.tan(FOV / 2);
-  const s = {
-    cols, rows, cw, ch, proj,
-    vscale: proj * cw / ch,
-    horizon: Math.floor(rows * HORIZON_FRAC),
-    glyph: new Array(cols * rows),
-    colour: new Array(cols * rows),
-    depth: new Float32Array(cols * rows),
-    skyEnd: new Int32Array(cols),
-    covWords: ((rows + 31) >> 5),
-    cov: new Uint32Array((rows + 31) >> 5),
-    hasHoles: new Uint8Array(cols),
-    holeMask: new Uint32Array(cols * ((rows + 31) >> 5)),
-    set(x, y, g, c) {
-      if (x < 0 || x >= cols || y < 0 || y >= rows) return;
-      this.glyph[y * cols + x] = g;
-      this.colour[y * cols + x] = c;
-    },
-    setDepth(x, y, g, c, d) {
-      if (x < 0 || x >= cols || y < 0 || y >= rows) return;
-      const i = y * cols + x;
-      this.glyph[i] = g;
-      this.colour[i] = c;
-      this.depth[i] = d;
-    },
-    fillRow(y, g, c, d) {
-      for (let x = 0; x < cols; x++) this.setDepth(x, y, g, c, d);
-    },
-  };
-  s.glyph.fill(undefined);
-  s.depth.fill(1e9);
-  return s;
 }
 
 function renderAt(world, { z, pitch, cols = 90, rows = 40, x = 25.5, y = 5.5 }) {

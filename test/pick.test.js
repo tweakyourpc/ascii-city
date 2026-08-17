@@ -15,6 +15,7 @@ import { Panel, wrap } from '../src/render/panel.js';
 import { wikiKey, summary, _reset } from '../src/wiki.js';
 import { T } from '../src/world/source.js';
 import { FOV, HORIZON_FRAC } from '../src/config.js';
+import { makeScreen } from './support/screen.js';
 
 /* ------------------------------- fixture -------------------------------- */
 
@@ -46,51 +47,6 @@ function world(extra = []) {
   ], 'Pick City');
 }
 
-function makeScreen(cols, rows) {
-  const cw = 8;
-  const ch = 15;
-  const proj = (cols / 2) / Math.tan(FOV / 2);
-  const s = {
-    cols, rows, cw, ch, proj,
-    vscale: proj * cw / ch,
-    horizon: Math.floor(rows * HORIZON_FRAC),
-    glyph: new Array(cols * rows),
-    colour: new Array(cols * rows),
-    depth: new Float32Array(cols * rows),
-    skyEnd: new Int32Array(cols),
-    covWords: ((rows + 31) >> 5),
-    cov: new Uint32Array((rows + 31) >> 5),
-    hasHoles: new Uint8Array(cols),
-    holeMask: new Uint32Array(cols * ((rows + 31) >> 5)),
-    scrims: [],
-    set(x, y, g, c) {
-      if (x < 0 || x >= cols || y < 0 || y >= rows) return;
-      this.glyph[y * cols + x] = g;
-      this.colour[y * cols + x] = c;
-    },
-    setDepth(x, y, g, c, d) {
-      if (x < 0 || x >= cols || y < 0 || y >= rows) return;
-      const i = y * cols + x;
-      this.glyph[i] = g; this.colour[i] = c; this.depth[i] = d;
-    },
-    fillRow(y, g, c, d) { for (let x = 0; x < cols; x++) this.setDepth(x, y, g, c, d); },
-    text(x, y, str, c) {
-      for (let i = 0; i < str.length; i++) {
-        const cx = x + i;
-        if (cx < 0) continue;
-        if (cx >= cols) break;
-        if (str[i] === ' ') continue;
-        this.glyph[y * cols + cx] = str[i];
-        this.colour[y * cols + cx] = c;
-      }
-    },
-    scrim(...a) { this.scrims.push(a); },
-  };
-  s.vscale = s.proj * cw / ch;
-  s.glyph.fill(undefined);
-  s.depth.fill(1e9);
-  return s;
-}
 
 /** Render looking north at the tower, and return everything needed to pick. */
 function scene({ z = 20, pitch = 3, cols = 120, rows = 36 } = {}) {

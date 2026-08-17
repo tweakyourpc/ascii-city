@@ -5,6 +5,12 @@
 
 /* ------------------------------- display ------------------------------- */
 
+/**
+ * 0 = glyph (one character per cell), 1 = half-block (double vertical
+ * resolution, solid colour). See MODE in screen.js. Toggled at runtime with B.
+ */
+export const RENDER_MODE = 0;
+
 export const FONT_PX = 14;
 export const FONT_STACK = 'ui-monospace, Menlo, Consolas, monospace';
 export const LINE_RATIO = 1.05;        // cell height as a multiple of font size
@@ -38,8 +44,18 @@ export const MIN_CAM_Z = 0.05;         // below this the floor cast degenerates
 export const MAX_CAM_Z = 400;          // soft ceiling
 export const Z_ACCEL = 26;             // cells/s^2 on Q/E
 export const Z_DAMP = 0.02;            // velocity retained per second
-export const WALK_SPEED = 4.2;
-export const RUN_MULT = 11 / 4.2;
+export const WALK_SPEED = 5.6;
+export const RUN_MULT = 4.0;
+/**
+ * Travel speed scales with altitude, the way every map and flight view does:
+ * you move at a rate proportional to how much you can see. At eye level this
+ * is a walk; at 200 m it crosses a city in seconds, without making street
+ * level uncontrollable.
+ */
+export const SPEED_PER_CELL_UP = 0.035;
+// Capped so the fastest case still crosses a loaded extract in a few seconds
+// rather than in one. Uncapped, altitude alone reached Mach 2.
+export const MAX_SPEED_MULT = 6;
 export const BODY_R = 0.28;            // collision half-width, cells
 export const MOVE_CLEAR = 0.35;        // vertical clearance needed to fly over
 export const WADE_Z = 2.0;             // above this you fly over water

@@ -1,4 +1,4 @@
-import { Screen } from './screen.js';
+import { Screen, MODE as RENDER } from './screen.js';
 import { Camera } from './camera.js';
 import { Input } from './input.js';
 import { Hud } from './hud.js';
@@ -18,6 +18,7 @@ import { canMoveTo, settle, floorAt } from './collision.js';
 import { julianDay, sunPos, altAz } from './astro.js';
 import {
   WALK_SPEED, RUN_MULT, Z_ACCEL, Z_DAMP,
+  SPEED_PER_CELL_UP, MAX_SPEED_MULT,
   DEFAULT_LAT, DEFAULT_LON,
 } from './config.js';
 import { wrap } from './world/source.js';
@@ -145,7 +146,10 @@ function update(dt) {
   }
 
   const running = input.down('shift');
-  const speed = WALK_SPEED * (running ? RUN_MULT : 1) * dt;
+  // Ground speed rises with height, so flying across a city is quick while
+  // walking a street stays controllable.
+  const altMult = Math.min(MAX_SPEED_MULT, 1 + cam.z * SPEED_PER_CELL_UP);
+  const speed = WALK_SPEED * altMult * (running ? RUN_MULT : 1) * dt;
   const fx = Math.cos(cam.angle);
   const fy = Math.sin(cam.angle);
 
@@ -159,6 +163,7 @@ function update(dt) {
   if (input.down('arrowright')) cam.angle -= 1.8 * dt;
 
   for (let i = input.takeTaps('n'); i > 0; i--) labels.cycle();
+  for (let i = input.takeTaps('b'); i > 0; i--) screen.cycleMode();
   if (input.takeTaps('escape')) panel.close();
   for (let i = input.takeTaps('t'); i > 0; i--) traffic.cycle();
 
@@ -272,6 +277,7 @@ function frame() {
       : null,
     labelMode: labels.mode,
     trafficMode: traffic.mode,
+    renderMode: screen.mode,
   });
 
   // Keep the URL in step with where you are, so any view can be shared.
@@ -340,5 +346,6 @@ if (initial.bbox) loadView(initial);
 
 // Handy for poking at the engine from the console.
 Object.assign(window, {
-  cam, screen, state, floorAt, labels, panel, traffic, MODE, TRAFFIC, pick,
+  cam, screen, state, floorAt, labels, panel, traffic,
+  MODE, TRAFFIC, RENDER, pick,
 });

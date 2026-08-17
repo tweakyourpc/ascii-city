@@ -23,25 +23,21 @@ export function drawLoading(screen, { title, detail, t }) {
 
   screen.ctx.fillStyle = '#04080c';
   screen.ctx.fillRect(0, 0, screen.width, screen.height);
-  screen.glyph.fill(undefined);
+  screen.clear();
 
-  const mid = Math.floor(screen.rows / 2);
+  const mid = Math.floor(screen.outRows / 2);
 
   // A faint grid of dots, so the frame does not read as a dead canvas.
-  for (let y = 0; y < screen.rows; y += 2) {
+  for (let y = 0; y < screen.outRows; y += 2) {
     for (let x = (y % 4 === 0) ? 0 : 3; x < screen.cols; x += 6) {
-      screen.set(x, y, '.', col2str(10, 30, 38));
+      screen.text(x, y, '.', col2str(10, 30, 38));
     }
   }
 
   if (screen.cols > 40) {
     for (let i = 0; i < BANNER.length; i++) {
-      const row = mid - 5 + i;
       const x0 = Math.floor((screen.cols - BANNER[i].length) / 2);
-      for (let j = 0; j < BANNER[i].length; j++) {
-        const ch = BANNER[i][j];
-        if (ch !== ' ') screen.set(x0 + j, row, ch, dim);
-      }
+      screen.text(x0, mid - 5 + i, BANNER[i], dim);
     }
   }
 
@@ -59,9 +55,9 @@ export function drawError(screen, { title, detail, hint }) {
 
   screen.ctx.fillStyle = '#0c0605';
   screen.ctx.fillRect(0, 0, screen.width, screen.height);
-  screen.glyph.fill(undefined);
+  screen.clear();
 
-  const mid = Math.floor(screen.rows / 2);
+  const mid = Math.floor(screen.outRows / 2);
   const rule = '-'.repeat(Math.min(screen.cols - 4, 54));
 
   screen.centreText(mid - 3, rule, dim);

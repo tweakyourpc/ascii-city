@@ -409,7 +409,15 @@ export class OsmWorld {
           const t = seg[i] > 1e-9 ? (want - acc) / seg[i] : 0;
           const ax = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t;
           const ay = pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t;
-          this._anchors.push({ x: ax, y: ay, name: nameId, rank, junction: 0 });
+          // Which way the street runs here, so a label can be written ALONG
+          // it rather than always horizontally.
+          const sx = pts[i + 1][0] - pts[i][0];
+          const sy = pts[i + 1][1] - pts[i][1];
+          const sl = Math.hypot(sx, sy) || 1;
+          this._anchors.push({
+            x: ax, y: ay, name: nameId, rank, junction: 0,
+            dx: sx / sl, dy: sy / sl,
+          });
           break;
         }
         acc += seg[i];
@@ -433,9 +441,12 @@ export class OsmWorld {
       // Mid-block anchors alone almost never land near a junction (measured at
       // 3%), and "42nd and 5th" is the answer a person actually wants.
       for (const nameId of set) {
+        // Direction is filled in below from the nearest mid-block anchor of
+        // the same street: a junction vertex has no single tangent.
         this._anchors.push({
           x: jx, y: jy, name: nameId,
           rank: this.streetRank[nameId] ?? 0, junction: 1,
+          dx: 0, dy: 0,
         });
       }
     }
@@ -450,11 +461,26 @@ export class OsmWorld {
       }
     }
 
+    // Junction anchors inherit the tangent of the nearest anchor of the same
+    // street that has one.
+    for (const a of this._anchors) {
+      if (a.dx || a.dy) continue;
+      let bd = Infinity;
+      for (const b of this._anchors) {
+        if (b.name !== a.name || (!b.dx && !b.dy)) continue;
+        const d = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+        if (d < bd) { bd = d; a.dx = b.dx; a.dy = b.dy; }
+      }
+      if (!a.dx && !a.dy) a.dx = 1;
+    }
+
     const n = this._anchors.length;
     const A = {
       n,
       x: new Float32Array(n),
       y: new Float32Array(n),
+      dx: new Float32Array(n),
+      dy: new Float32Array(n),
       name: new Uint16Array(n),
       rank: new Uint8Array(n),
       junction: new Uint8Array(n),
@@ -462,6 +488,7 @@ export class OsmWorld {
     for (let i = 0; i < n; i++) {
       const a = this._anchors[i];
       A.x[i] = a.x; A.y[i] = a.y;
+      A.dx[i] = a.dx; A.dy[i] = a.dy;
       A.name[i] = a.name; A.rank[i] = a.rank; A.junction[i] = a.junction;
     }
     this.anchor = A;
