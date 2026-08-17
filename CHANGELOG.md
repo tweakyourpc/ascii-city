@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-16
+
 ### Added
 - **Type a city name.** The location box accepts "Kyoto" as well as
   coordinates and map links, resolved through Nominatim with Photon as a
@@ -155,6 +157,7 @@ change after this point is a reviewable diff against a known-good starting state
   as depth-sorted sprites with direction-dependent headlights and tail lights.
 - WASD movement with drag-look, at a fixed eye height.
 
-[Unreleased]: https://github.com/tweakyourpc/ascii-city/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/tweakyourpc/ascii-city/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/tweakyourpc/ascii-city/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/tweakyourpc/ascii-city/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/tweakyourpc/ascii-city/releases/tag/v0.1.0

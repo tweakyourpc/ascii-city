@@ -58,8 +58,9 @@ map data: street names, building names, heights, addresses, construction dates.
   link, name themselves as you approach.
 - Click anything. A building gives its name, type, real height and floor
   count, address, year built and distance, plus a Wikipedia summary for the
-  roughly one building in nine that has one. The ground gives the street. The
-  sky gives the star, planet or the Moon, with its phase.
+  roughly one building in nine that has one. The ground gives the street, or a
+  named cafe, shop or subway entrance if you clicked near one. The sky gives
+  the star, planet or the Moon, with its phase.
 
 In one square kilometre of Midtown Manhattan that is 296 named buildings, 148
 with Wikipedia articles, 987 street addresses and 184 named main arteries,
@@ -140,7 +141,7 @@ thousand times per frame.
 ## Tools
 
 ```bash
-npm test                                  # 120 tests, no network
+npm test                                  # 144 tests, no network
 node tools/render-frame.js --z 60 --pitch 15    # render a frame as text
 node tools/map-preview.js --city london         # top-down map of an import
 ```
