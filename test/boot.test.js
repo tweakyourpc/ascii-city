@@ -12,6 +12,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { _resetHealth } from '../src/world/overpass.js';
+
 /** A tiny hand-built OSM extract around 40.758N, -73.9855W. */
 const SYNTHETIC_OSM = [
   {
@@ -52,6 +54,7 @@ function installDom() {
   const els = new Map();
   const windowListeners = new Map();
   let fillText = 0;
+  let texts = [];
   let fillRect = 0;
 
   class El {
@@ -88,7 +91,7 @@ function installDom() {
     textBaseline: 'top',
     fillStyle: '#000',
     measureText: (s) => ({ width: s.length * 8 }),
-    fillText: () => { fillText++; },
+    fillText: (t) => { fillText++; texts.push(String(t)); },
     fillRect: () => { fillRect++; },
     createLinearGradient: () => ({ addColorStop() {} }),
   };
@@ -163,6 +166,8 @@ function installDom() {
     },
     counts: () => ({ fillText, fillRect }),
     fetchCalls: () => fetchCalls,
+    text: () => texts.join(' '),
+    clearText: () => { texts = []; },
     mouse: (x, y) => {
       const c = els.get('c');
       c.fire('mousedown', { clientX: x, clientY: y });
@@ -291,4 +296,42 @@ test('the loaded world renders without throwing', () => {
   const before = dom.counts().fillText;
   dom.pump(5);
   assert.ok(dom.counts().fillText > before, 'nothing drawn after the city loaded');
+});
+
+/**
+ * Deliberately last: it forces a failed load, and boot.test.js shares one
+ * module-level DOM across ordered tests.
+ */
+test('a failed load offers a way out, and R takes it', async () => {
+  const good = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return { ok: false, status: 504, headers: { get: () => null } };
+  };
+  _resetHealth();
+  dom.clearText();
+
+  // A bbox no earlier test has cached, or this never reaches the network.
+  dom.el('coords').value = '35.6895,139.6917';
+  dom.el('go').fire('click');
+  for (let i = 0; i < 12; i++) {
+    await new Promise((r) => setImmediate(r));
+    dom.pump(3);
+  }
+
+  assert.ok(calls > 1, 'a busy mirror was not retried elsewhere');
+  const drawn = dom.text();
+  assert.match(drawn, /COULD NOT LOAD THAT AREA/);
+  assert.match(drawn, /mirrors are busy/, `error screen said: ${drawn}`);
+  assert.doesNotMatch(drawn, /That Overpass instance/);
+
+  // R must actually re-issue the request rather than merely redraw.
+  const before = calls;
+  dom.key('r');
+  dom.pump(3);
+  await new Promise((r) => setImmediate(r));
+  assert.ok(calls > before, 'R did not retry the load');
+
+  globalThis.fetch = good;
 });

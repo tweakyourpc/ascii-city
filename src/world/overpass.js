@@ -12,21 +12,53 @@
 
 /**
  * Public instances are individually unreliable, and which one is healthy
- * varies by the minute: in testing, one endpoint timed out on a query another
- * answered in four seconds. The order is shuffled per call, or a degraded
- * first entry would fail every load.
+ * varies by the minute. Measured 2026-08-17: overpass-api.de answered in 1.7s
+ * while private.coffee and kumi.systems both returned 504 after 32s, each with
+ * fifteen queries backed up server-side. Treat this list as a point-in-time
+ * sample, not a ranking — see orderEndpoints() for how health is learned at
+ * runtime rather than hard-coded here.
  *
- * Only worldwide instances belong here. Regional mirrors such as
- * overpass.osm.ch answer 200 with zero elements for anywhere outside their
- * coverage, which is indistinguishable from genuinely empty map data.
+ * Two traps, both of which cost real debugging time:
+ *
+ * Regional mirrors such as overpass.osm.ch answer 200 with zero elements for
+ * anywhere outside their coverage, which is indistinguishable from genuinely
+ * empty map data. Only worldwide instances belong here.
+ *
+ * overpass.osm.jp and overpass.nchc.org.tw serve correct worldwide data but
+ * send no Access-Control-Allow-Origin, so a browser cannot read the response.
+ * They look fine from curl and fail from the page.
  */
 const ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
+  // Corporate mirror with no published usage policy, and blocked on some
+  // school and corporate networks. Last, so a false positive there costs one
+  // extra attempt rather than a failed load.
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ];
 
-const TIMEOUT_MS = 45000;
+/**
+ * Buildings and streets are worth waiting for; water and parks are not. The
+ * extra layers also get a single attempt rather than the full fallback, which
+ * is what keeps a bad minute from turning into four minutes of loading screen.
+ */
+const CORE_TIMEOUT_MS = 45000;
+const EXTRA_TIMEOUT_MS = 20000;
+
+/**
+ * How long a failure is held against an instance. Saturation is a property of
+ * the last few minutes, so these are deliberately short, and deliberately kept
+ * in memory only: persisting them could strand a user whose own network
+ * blipped once.
+ */
+const COOL_BUSY_MS = 10 * 60 * 1000;
+const COOL_RATE_MS = 60 * 1000;
+const COOL_EMPTY_MS = 6 * 60 * 60 * 1000;
+
+/** Success, by contrast, is worth remembering across a reload. */
+const GOOD_KEY = 'ascii-city:overpass-good:1';
+const GOOD_TTL_MS = 6 * 60 * 60 * 1000;
 
 // Some instances rate-limit requests that arrive without a meaningful
 // User-Agent. Browsers set their own and silently ignore this header; it is
@@ -73,11 +105,16 @@ export const PRESETS = {
  *
  * `out geom` inlines coordinates on ways and on relation members, so there is
  * no second pass to resolve node ids.
+ *
+ * `timeoutSec` is the server's own budget. It must not outlive the client's,
+ * or aborting the fetch leaves the instance computing a result nobody will
+ * ever read.
  */
-export function buildQuery([s, w, n, e], layer = 'core') {
+export function buildQuery([s, w, n, e], layer = 'core', timeoutSec = 60) {
   const bbox = `${s},${w},${n},${e}`;
+  const t = Math.max(5, Math.round(timeoutSec));
   if (layer === 'core') {
-    return `[out:json][timeout:60];
+    return `[out:json][timeout:${t}];
 (
   nwr["building"](${bbox});
   way["highway"](${bbox});
@@ -85,7 +122,7 @@ export function buildQuery([s, w, n, e], layer = 'core') {
 out geom;`;
   }
   if (layer === 'poi') {
-    return `[out:json][timeout:60];
+    return `[out:json][timeout:${t}];
 (
   node["amenity"]["name"](${bbox});
   node["shop"]["name"](${bbox});
@@ -94,7 +131,7 @@ out geom;`;
 );
 out;`;
   }
-  return `[out:json][timeout:60];
+  return `[out:json][timeout:${t}];
 (
   way["waterway"~"^(river|canal|stream)$"](${bbox});
   nwr["natural"="water"](${bbox});
@@ -223,26 +260,162 @@ const shuffled = (arr) => {
   return a;
 };
 
+/* ------------------------------ endpoint health -------------------------- */
+
+/** Just the host, for error messages that name instances rather than URLs. */
+function hostOf(url) {
+  try { return new URL(url).host; } catch { return url; }
+}
+
+/**
+ * Remember success, forget failure.
+ *
+ * The old code shuffled the endpoint list afresh on every query. With three
+ * layers per load that is three independent rolls of the dice, so layers two
+ * and three cheerfully re-tried mirrors that had 504'd seconds earlier in the
+ * same load. Against one healthy instance of four that is most of a minute of
+ * pure waste, and if the healthy one happened to hiccup, a failed load.
+ *
+ * The asymmetry is deliberate. A success is a durable-ish fact worth carrying
+ * across a reload; a failure is a statement about the last few minutes and
+ * lives in memory only.
+ */
+const cooling = new Map();      // url -> epoch ms when it may be tried freely
+
+/** Overridable so tests never wait on a real clock. */
+let sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export function _setSleep(fn) { sleep = fn; }
+
+export function _resetHealth() {
+  cooling.clear();
+  try { localStorage.removeItem(GOOD_KEY); } catch { /* storage disabled */ }
+}
+
+function stickyGood() {
+  try {
+    const raw = localStorage.getItem(GOOD_KEY);
+    if (!raw) return null;
+    const { url, at } = JSON.parse(raw);
+    if (!url || Date.now() - at > GOOD_TTL_MS) return null;
+    // A list edit must not strand us on an endpoint we no longer ship.
+    return ENDPOINTS.includes(url) ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+function markGood(url) {
+  cooling.delete(url);
+  try {
+    localStorage.setItem(GOOD_KEY, JSON.stringify({ url, at: Date.now() }));
+  } catch { /* storage disabled or full; the in-memory path still works */ }
+}
+
+function markBad(url, coolMs) {
+  cooling.set(url, Date.now() + coolMs);
+}
+
+/**
+ * Healthy endpoints first, cooling ones after, and never drop any: if
+ * everything is cooling, trying them in order of soonest expiry still beats
+ * refusing to load.
+ *
+ * The shuffle survives for the first pick. It exists so users spread
+ * themselves across volunteer instances, and dropping it entirely would funnel
+ * everybody onto whichever one this file happens to list first.
+ */
+export function _orderEndpoints(now = Date.now()) {
+  const warm = [];
+  const cold = [];
+  for (const url of ENDPOINTS) {
+    const until = cooling.get(url) ?? 0;
+    (until > now ? cold : warm).push(url);
+  }
+
+  const first = stickyGood();
+  const head = first && warm.includes(first) ? [first] : [];
+  const rest = shuffled(warm.filter((u) => u !== head[0]));
+  cold.sort((a, b) => cooling.get(a) - cooling.get(b));
+
+  return [...head, ...rest, ...cold];
+}
+
+/**
+ * What a response means for the instance that sent it, in one place rather
+ * than spread across a chain of ifs.
+ */
+function classify(res) {
+  if (res.ok) return { kind: 'ok' };
+  if (res.status === 429) return { kind: 'rate', coolMs: COOL_RATE_MS };
+  if (res.status === 503 || res.status === 504) {
+    return { kind: 'busy', coolMs: COOL_BUSY_MS };
+  }
+  // Any other 4xx is our bug, not theirs. Sending the same malformed query on
+  // to three more volunteer servers helps nobody.
+  if (res.status >= 400 && res.status < 500) return { kind: 'fatal' };
+  return { kind: 'busy', coolMs: COOL_BUSY_MS };
+}
+
+/** Honour Retry-After when it is sane, otherwise back off a fixed moment. */
+function retryDelay(res) {
+  const raw = Number(res.headers?.get?.('Retry-After'));
+  if (Number.isFinite(raw) && raw > 0) return Math.min(10000, Math.max(1000, raw * 1000));
+  return 4000;
+}
+
+/** One honest sentence about why nothing loaded, built from every attempt. */
+function describe(causes) {
+  if (!causes.length) return { message: 'Could not reach Overpass' };
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return { message: 'You appear to be offline.', hint: 'Reconnect, then press R to retry.' };
+  }
+  const every = (k) => causes.every((c) => c.kind === k);
+  if (every('empty')) {
+    return {
+      message: 'No Overpass mirror has data for this area.',
+      hint: 'Try somewhere else, or press P for the procedural city.',
+    };
+  }
+  if (every('busy') || every('rate')) {
+    return {
+      message: `All ${causes.length} Overpass mirrors are busy right now.`,
+      hint: 'Press R to retry · P for the procedural city.',
+    };
+  }
+  return {
+    message: 'Could not reach any Overpass mirror.',
+    hint: 'Press R to retry · P for the procedural city.',
+  };
+}
+
 /**
  * Run one query, trying instances until one answers.
  * @param {boolean} expectData treat an empty 200 as a failed instance and move
  *   on, rather than as an answer. Guards against a mirror that is up but does
  *   not hold data for the requested area.
+ * @param {number} maxEndpoints how far down the list to fall. The expendable
+ *   layers pass 1, so a bad minute costs one timeout instead of four.
  */
-async function runQuery(query, { onProgress, signal, label, expectData = false }) {
-  const urls = shuffled(ENDPOINTS);
-  let lastErr = null;
+async function runQuery(query, {
+  onProgress, signal, label, expectData = false,
+  timeoutMs = CORE_TIMEOUT_MS, maxEndpoints = ENDPOINTS.length,
+}) {
+  const urls = _orderEndpoints().slice(0, maxEndpoints);
+  // Every attempt, not just the last one: "that instance is busy" was a lie
+  // whenever all of them failed, and it gave the user nothing to act on.
+  const causes = [];
 
-  for (let i = 0; i < urls.length; i++) {
-    onProgress(i === 0 ? `Querying ${label}` : `Retrying ${label} (${i + 1}/${urls.length})`);
-
+  const once = async (url) => {
+    // An already-aborted signal would never fire the relay below, so it has to
+    // be checked rather than merely listened for.
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     const timer = new AbortController();
-    const timeout = setTimeout(() => timer.abort(), TIMEOUT_MS);
+    const timeout = setTimeout(() => timer.abort(), timeoutMs);
     const relay = () => timer.abort();
     if (signal) signal.addEventListener('abort', relay, { once: true });
-
     try {
-      const res = await fetch(urls[i], {
+      return await fetch(url, {
         method: 'POST',
         body: 'data=' + encodeURIComponent(query),
         headers: {
@@ -251,33 +424,77 @@ async function runQuery(query, { onProgress, signal, label, expectData = false }
         },
         signal: timer.signal,
       });
-
-      if (res.status === 429 || res.status === 504 || res.status === 503) {
-        lastErr = new Error('That Overpass instance is busy');
-        continue;
-      }
-      if (!res.ok) {
-        lastErr = new Error(`Overpass returned ${res.status}`);
-        continue;
-      }
-      const json = await res.json();
-      const elements = json.elements || [];
-      if (expectData && elements.length === 0) {
-        // Up, but holds nothing here. Ask somebody else before concluding the
-        // area is empty.
-        lastErr = new Error('That instance has no data for this area');
-        continue;
-      }
-      return elements;
-    } catch (err) {
-      if (signal?.aborted) throw err;
-      lastErr = err.name === 'AbortError' ? new Error('Overpass timed out') : err;
     } finally {
       clearTimeout(timeout);
       if (signal) signal.removeEventListener('abort', relay);
     }
+  };
+
+  for (let i = 0; i < urls.length; i++) {
+    const url = urls[i];
+    const host = hostOf(url);
+    onProgress(i === 0 ? `Querying ${label}` : `Retrying ${label} (${i + 1}/${urls.length})`);
+
+    try {
+      let res = await once(url);
+      let verdict = classify(res);
+
+      // A 429 means "wait", not "you are broken". Give it exactly one more
+      // chance on the same instance before moving on; more than that would be
+      // hammering something that has just asked us not to.
+      if (verdict.kind === 'rate') {
+        await sleep(retryDelay(res));
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+        res = await once(url);
+        verdict = classify(res);
+      }
+
+      if (verdict.kind === 'fatal') {
+        markGood(url);      // it answered us; the query is what is wrong
+        throw new Error(`Overpass rejected the query (${res.status})`);
+      }
+      if (verdict.kind !== 'ok') {
+        markBad(url, verdict.coolMs);
+        causes.push({ host, kind: verdict.kind });
+        continue;
+      }
+
+      const json = await res.json();
+      const elements = json.elements || [];
+      if (expectData && elements.length === 0) {
+        // Up, but holds nothing here. Ask somebody else before concluding the
+        // area is empty. This is a coverage property, not a transient one, so
+        // it earns a long cooldown.
+        markBad(url, COOL_EMPTY_MS);
+        causes.push({ host, kind: 'empty' });
+        continue;
+      }
+      markGood(url);
+      return elements;
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      if (err.name !== 'AbortError' && !/^Overpass rejected/.test(err.message)) {
+        // A network TypeError: DNS, CORS, or offline.
+        markBad(url, COOL_BUSY_MS);
+        causes.push({ host, kind: 'network' });
+        continue;
+      }
+      if (err.name === 'AbortError') {
+        // Our own timer. No retry: the instance is still computing, so asking
+        // again immediately only adds to the queue that made us time out.
+        markBad(url, COOL_BUSY_MS);
+        causes.push({ host, kind: 'busy' });
+        continue;
+      }
+      throw err;
+    }
   }
-  throw lastErr || new Error('Could not reach Overpass');
+
+  const { message, hint } = describe(causes);
+  const err = new Error(message);
+  err.causes = causes;
+  if (hint) err.hint = hint;
+  throw err;
 }
 
 /**
@@ -302,27 +519,30 @@ export async function fetchOsm(bbox, { onProgress = () => {}, signal } = {}) {
     return cached;
   }
 
-  const core = await runQuery(buildQuery(bbox, 'core'),
-    { onProgress, signal, label: 'buildings and streets', expectData: true });
+  const coreSec = Math.floor(CORE_TIMEOUT_MS / 1000);
+  const extraSec = Math.floor(EXTRA_TIMEOUT_MS / 1000);
 
-  // Best effort. A missing river is worth far less than a failed load.
-  let extra = [];
-  try {
-    extra = await runQuery(buildQuery(bbox, 'detail'),
-      { onProgress, signal, label: 'water and parks' });
-  } catch (err) {
-    if (signal?.aborted) throw err;
-    onProgress('Skipped water and parks');
-  }
+  const core = await runQuery(buildQuery(bbox, 'core', coreSec),
+    { onProgress, signal, label: 'buildings and streets', expectData: true,
+      timeoutMs: CORE_TIMEOUT_MS });
 
-  let pois = [];
-  try {
-    pois = await runQuery(buildQuery(bbox, 'poi'),
-      { onProgress, signal, label: 'places' });
-  } catch (err) {
-    if (signal?.aborted) throw err;
-    onProgress('Skipped places');
-  }
+  // Best effort. A missing river is worth far less than a failed load, so
+  // these get one attempt on a short budget — and because the core query just
+  // marked a winner, that one attempt is the instance that has already
+  // answered us seconds ago.
+  const bestEffort = async (layer, label) => {
+    try {
+      return await runQuery(buildQuery(bbox, layer, extraSec),
+        { onProgress, signal, label, timeoutMs: EXTRA_TIMEOUT_MS, maxEndpoints: 1 });
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      onProgress(`Skipped ${label}`);
+      return [];
+    }
+  };
+
+  const extra = await bestEffort('detail', 'water and parks');
+  const pois = await bestEffort('poi', 'places');
 
   const elements = slim(core.concat(extra, pois));
   writeCache(bbox, elements);

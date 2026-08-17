@@ -11,6 +11,7 @@ export class Input {
     this.hourShift = 0;   // accumulated [ and ] presses
     this.taps = Object.create(null);   // discrete presses, for toggles
     this.click = null;    // {x, y} in CSS px, consumed by takeClick()
+    this.hover = null;    // {x, y} in CSS px, last pointer position
 
     this._lastX = 0;
     this._lastY = 0;
@@ -50,6 +51,9 @@ export class Input {
       this._moved = 0;
     });
     window.addEventListener('mousemove', (e) => {
+      // Tracked even when not dragging, so the panel can offer a pointer
+      // cursor over the rows that are actually links.
+      this.hover = { x: e.clientX, y: e.clientY };
       if (!this.dragging) return;
       // Accumulated travel, not net displacement: a circular drag that returns
       // to where it started must not count as a click.

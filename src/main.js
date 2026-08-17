@@ -38,6 +38,7 @@ const state = {
   message: '',
   error: null,
   token: 0,                  // invalidates in-flight loads
+  load: null,                // AbortController for the in-flight load
 };
 
 const traffic = new Traffic(null);
@@ -95,6 +96,13 @@ async function loadView(view) {
   hud.select(view.preset);
   hud.syncHash(view);
 
+  // Stop the previous load rather than merely ignoring its result. Overpass is
+  // volunteer-run, and without this a retry leaves the abandoned queries
+  // running against it.
+  state.load?.abort();
+  const load = new AbortController();
+  state.load = load;
+
   if (!view.bbox) {
     loadProcedural(view.camera);
     return;
@@ -107,6 +115,7 @@ async function loadView(view) {
   try {
     const elements = await fetchOsm(view.bbox, {
       onProgress: (msg) => { if (token === state.token) state.message = msg; },
+      signal: load.signal,
     });
     if (token !== state.token) return;      // superseded by a newer request
 
@@ -251,10 +260,19 @@ function frame() {
   }
 
   if (state.phase === 'error') {
+    // Poll before returning, or the error screen is a dead end: the normal
+    // input handling further down never runs in this phase.
+    if (input.takeTaps('r') && state.view) {
+      loadView(state.view);
+    } else if (input.takeTaps('p')) {
+      loadView({ preset: 'procedural', bbox: null, label: 'Procedural City' });
+    }
+    input.takeClick();    // so a stale click cannot pick into the scene later
+
     drawError(screen, {
       title: 'COULD NOT LOAD THAT AREA',
       detail: state.error?.message ?? 'Unknown error',
-      hint: 'Pick another city, or try again in a moment.',
+      hint: state.error?.hint ?? 'R retry · P procedural city · or pick another city above',
     });
     requestAnimationFrame(frame);
     return;
@@ -280,6 +298,16 @@ function frame() {
     renderMode: screen.mode,
   });
 
+  // A canvas has no elements to hover, so the cursor is the only affordance
+  // saying the link row is clickable.
+  if (input.hover) {
+    const r = canvas.getBoundingClientRect();
+    const over = panel.open && panel.linkAt(screen,
+      Math.floor((input.hover.x - r.left) / screen.cw),
+      Math.floor((input.hover.y - r.top) / screen.ch));
+    canvas.style.cursor = over ? 'pointer' : '';
+  }
+
   // Keep the URL in step with where you are, so any view can be shared.
   if (now - lastHashSync > 1000) {
     lastHashSync = now;
@@ -298,11 +326,14 @@ function handleClick(c) {
   const col = Math.floor((c.x - r.left) / screen.cw);
   const row = Math.floor((c.y - r.top) / screen.ch);
 
-  // A click on the panel itself dismisses it rather than picking through it.
+  // A click on the panel itself dismisses it rather than picking through it —
+  // unless it landed on a link, in which case follow it and leave the card up.
   const box = panel.rect(screen);
   if (box && col >= box.x && col < box.x + box.w &&
       row >= box.y && row < box.y + box.h) {
-    panel.close();
+    const link = panel.linkAt(screen, col, row);
+    if (link) window.open(link, '_blank', 'noopener,noreferrer');
+    else panel.close();
     return;
   }
 
@@ -317,7 +348,9 @@ function handleClick(c) {
       const token = hit.b;
       summary(key, (v) => {
         if (panel.hit && panel.hit.b === token) {
-          panel.wiki = v ? { state: 'ok', text: v.text } : { state: 'none', text: '' };
+          panel.wiki = v
+            ? { state: 'ok', text: v.text, title: v.title, url: v.url }
+            : { state: 'none', text: '' };
         }
       });
     }

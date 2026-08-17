@@ -11,7 +11,10 @@
  */
 
 const CACHE = new Map();              // key -> { text } | null
-const LS_PREFIX = 'ascii-city:wiki:1:';
+// Bumped to 2 when the article URL joined the cached record: a version-1 entry
+// has no link, and reusing it would silently withhold the link on exactly the
+// buildings a user has already looked at.
+const LS_PREFIX = 'ascii-city:wiki:2:';
 const TTL_MS = 30 * 24 * 3600 * 1000;
 const TIMEOUT_MS = 6000;
 const MAX_CHARS = 600;
@@ -89,7 +92,13 @@ async function fetchSummary(key, signal) {
   const j = await getJson(url, signal);
   const text = (j && j.extract) ? String(j.extract).slice(0, MAX_CHARS) : '';
   if (!text) throw new Error('no extract');
-  return { text, title: j.title || title };
+  // The summary is a teaser, so carry the article back with it. The REST
+  // response already names its own canonical page; the constructed form is
+  // only a fallback, built from what resolve() has already worked out.
+  const page = j?.content_urls?.desktop?.page
+    || `https://${lang}.wikipedia.org/wiki/`
+       + encodeURIComponent((j.title || title).replace(/ /g, '_'));
+  return { text, title: j.title || title, url: page };
 }
 
 /**

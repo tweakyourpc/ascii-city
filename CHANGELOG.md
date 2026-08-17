@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The identify card **links out**: to the Wikipedia article it quotes, to the
+  building's website, and to the OpenStreetMap element behind it.
+- `R` retries a failed load and `P` drops to the procedural city, so the error
+  screen is no longer a dead end.
+
+### Fixed
+- **A city would fail to load while a healthy mirror sat idle.** The endpoint
+  list was reshuffled for each of the three query layers, so every load re-tried
+  mirrors that had failed it seconds earlier. The engine now remembers the
+  instance that answered and reuses it, and sets a failed one aside for ten
+  minutes. Measured against live Overpass: all three layers now go to one host.
+- The expendable water/parks and places layers could each fall through every
+  endpoint at the full timeout, turning a bad minute into four minutes of
+  loading screen. They get one attempt on a short budget.
+- A malformed query was resent to every other mirror in turn. Any 4xx other
+  than 429 now fails immediately: it is our bug, not theirs.
+- A 429 was treated as "this instance is broken" rather than "wait a moment".
+  It now retries once, honouring `Retry-After`, then moves on.
+- The error only ever reported the *last* failure, so it said "That Overpass
+  instance is busy" when all of them were, and could not tell being offline
+  from being blocked. It now reports every attempt.
+- A load was never actually cancelled when superseded, it ran to completion
+  against a volunteer service and its result was discarded.
+- An already-aborted signal was ignored, because the abort was only listened
+  for, never checked.
+- The server-side query budget outlived the client's, leaving instances
+  computing results nobody would read.
+
+### Added
 - **Half-block rendering mode**, toggled with `B`: double vertical resolution,
   scene painted as solid colour. Adapted from a parallel implementation by
   another agent. Kept as a mode rather than a replacement, because glyphs
